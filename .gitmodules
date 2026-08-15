@@ -1,0 +1,3 @@
+[submodule "vendor/simplebgc32-control"]
+	path = vendor/simplebgc32-control
+	url = git@github.com:magdang/simplebgc32-control.git

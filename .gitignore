@@ -1,0 +1,10 @@
+# colcon
+build/
+install/
+log/
+
+# generated parameter library output, compiled artefacts
+*.o
+*.a
+__pycache__/
+*.pyc

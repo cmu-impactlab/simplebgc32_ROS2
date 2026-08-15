@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>sbgc_protocol</name>
+  <version>0.1.0</version>
+  <description>
+    SimpleBGC32 (BaseCam/AlexMos) serial protocol library, packaged for ament.
+
+    This package contains no ROS code and links against no ROS libraries. It
+    builds the byte-verified C core from the vendored simplebgc32-control
+    submodule and exports it as a CMake target, so the protocol has exactly one
+    implementation shared by the ROS driver and the upstream standalone tools.
+  </description>
+  <maintainer email="ymh1874@gmail.com">Yousef Hussein</maintainer>
+  <license>MIT</license>
+  <url type="repository">https://github.com/magdang/simplebgc32-control</url>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
