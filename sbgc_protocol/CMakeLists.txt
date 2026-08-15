@@ -43,6 +43,14 @@ target_include_directories(sbgc_protocol PUBLIC
   "$<BUILD_INTERFACE:${VENDOR}/include>"
   "$<INSTALL_INTERFACE:include>")
 
+# sbgc_api.c calls floor(), so the math library has to reach consumers of the
+# static archive too — hence PUBLIC rather than PRIVATE.
+#
+# Left unguarded on purpose. A NOT-WIN32 guard would suggest this package can
+# build somewhere without a separate libm, and it cannot: the vendored
+# transport is POSIX termios and poll. -lm is exactly as portable as the rest
+# of the library, and a guard would only let a doomed build fail later and
+# less clearly.
 target_link_libraries(sbgc_protocol PUBLIC m)
 
 # --------------------------------------------------------------------------

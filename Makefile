@@ -17,10 +17,17 @@ ROS_DISTRO ?= jazzy
 IMAGE      ?= ros:$(ROS_DISTRO)-ros-base
 WS         := /ws
 
+# The ros images declare no USER, so without --user every build would write
+# root-owned build/, install/ and log/ trees into the bind mount and the host
+# could not clean them up afterwards. HOME is redirected because the mapped UID
+# has no passwd entry in the image, and colcon wants somewhere writable.
+UIDGID := $(shell id -u):$(shell id -g)
+
 # --network=host so rosdep and apt can reach the network; --rm so nothing is
 # left behind. The workspace is bind-mounted rather than copied, so build
 # artefacts land in the host's build/ and incremental builds work.
-DOCKER_RUN = docker run --rm -v "$(CURDIR)":$(WS) -w $(WS) --network=host
+DOCKER_RUN = docker run --rm -v "$(CURDIR)":$(WS) -w $(WS) --network=host \
+             --user $(UIDGID) -e HOME=/tmp
 
 .PHONY: all build test shell clean submodule
 
@@ -31,15 +38,19 @@ all: build
 submodule:
 	@git submodule update --init --recursive
 
+# Deliberately no --symlink-install. Its symlinks record absolute paths under
+# the container's /ws, so an install tree built this way is full of dangling
+# links when read from the host. The convenience it buys is not worth an
+# install/ directory that only resolves inside a container.
 build: submodule
 	$(DOCKER_RUN) $(IMAGE) bash -lc '\
 	  . /opt/ros/$(ROS_DISTRO)/setup.sh && \
-	  colcon build --symlink-install'
+	  colcon build'
 
 test: submodule
 	$(DOCKER_RUN) $(IMAGE) bash -lc '\
 	  . /opt/ros/$(ROS_DISTRO)/setup.sh && \
-	  colcon build --symlink-install && \
+	  colcon build && \
 	  colcon test && \
 	  colcon test-result --verbose'
 

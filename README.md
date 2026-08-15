@@ -29,11 +29,20 @@ Under construction. Implemented so far:
 
 ## Getting the source
 
+The upstream protocol library is a submodule, so a plain `git clone` leaves
+`vendor/simplebgc32-control` empty and the build will stop with an explanation. Clone with:
+
 ```bash
-git clone --recurse-submodules https://github.com/…/simplebgc32-ros2.git
-# or, in an existing clone:
+git clone --recurse-submodules <this-repo>
+```
+
+or, in an existing clone:
+
+```bash
 git submodule update --init --recursive
 ```
+
+`make` targets run this for you.
 
 ## Building
 

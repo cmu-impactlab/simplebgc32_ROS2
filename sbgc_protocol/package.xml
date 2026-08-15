@@ -13,7 +13,10 @@
   </description>
   <maintainer email="ymh1874@gmail.com">Yousef Hussein</maintainer>
   <license>MIT</license>
-  <url type="repository">https://github.com/magdang/simplebgc32-control</url>
+  <!-- No <url type="repository"> until this repo has a remote. It must name
+       this package's own repository, not the vendored upstream, or every
+       package index will send people to the wrong project. -->
+  <url type="website">https://www.basecamelectronics.com/serialapi/</url>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
