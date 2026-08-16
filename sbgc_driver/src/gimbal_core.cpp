@@ -37,7 +37,41 @@ GimbalCore::GimbalCore(Config cfg, std::function<double()> now)
   status_.command_timeout = true;
 }
 
-void GimbalCore::setConfig(const Config & cfg) {cfg_ = cfg;}
+void GimbalCore::setConfig(const Config & cfg)
+{
+  // Configuration is not trusted any more than a command is. A NaN rate
+  // ceiling would let std::clamp pass anything straight through, and a NaN
+  // slew reaches the fixed-point conversion the header warns about. Bad values
+  // fall back to the defaults rather than being propagated.
+  const Config defaults{};
+  cfg_ = cfg;
+
+  for (int a = 0; a < kNumAxes; ++a) {
+    if (!std::isfinite(cfg_.max_rate_rad_s[a]) || cfg_.max_rate_rad_s[a] <= 0.0) {
+      cfg_.max_rate_rad_s[a] = defaults.max_rate_rad_s[a];
+    }
+    if (!std::isfinite(cfg_.limit_min_rad[a]) || !std::isfinite(cfg_.limit_max_rad[a])) {
+      cfg_.limit_min_rad[a] = defaults.limit_min_rad[a];
+      cfg_.limit_max_rad[a] = defaults.limit_max_rad[a];
+    }
+    // A reversed range would block both directions at once and strand the
+    // camera. Ordering it is more useful than refusing it, and the operator
+    // sees the corrected values on the status topic.
+    if (cfg_.limit_min_rad[a] > cfg_.limit_max_rad[a]) {
+      std::swap(cfg_.limit_min_rad[a], cfg_.limit_max_rad[a]);
+    }
+  }
+
+  if (!std::isfinite(cfg_.default_slew_rad_s) || cfg_.default_slew_rad_s <= 0.0) {
+    cfg_.default_slew_rad_s = defaults.default_slew_rad_s;
+  }
+  if (!std::isfinite(cfg_.command_timeout_s) || cfg_.command_timeout_s <= 0.0) {
+    cfg_.command_timeout_s = defaults.command_timeout_s;
+  }
+  if (!std::isfinite(cfg_.angle_fresh_s) || cfg_.angle_fresh_s <= 0.0) {
+    cfg_.angle_fresh_s = defaults.angle_fresh_s;
+  }
+}
 
 void GimbalCore::setControlAllowed(bool allowed)
 {
@@ -63,6 +97,10 @@ void GimbalCore::setLinkUp(bool up)
     telemetry_.valid = false;
     have_continuous_ = false;
     status_.angle_valid = false;
+    // The command goes too. A link that drops and recovers inside the command
+    // timeout would otherwise resume whatever was being commanded before the
+    // drop, without the operator having said anything since.
+    clearCommand();
   }
 }
 
@@ -88,6 +126,12 @@ void GimbalCore::submitRate(const AxisArray & rad_s)
 {
   if (!allFinite(rad_s)) {submitHold(); return;}
 
+  // A command that arrives while a gate is shut is dropped, not stored. Merely
+  // refusing to send it would leave it queued, and arming within the command
+  // timeout would then start the gimbal moving on an instruction given before
+  // the operator armed.
+  if (!motionPermitted()) {submitHold(); return;}
+
   for (int a = 0; a < kNumAxes; ++a) {
     double v = cfg_.invert[a] ? -rad_s[a] : rad_s[a];
     const double lim = std::abs(cfg_.max_rate_rad_s[a]);
@@ -101,13 +145,13 @@ void GimbalCore::submitRate(const AxisArray & rad_s)
 void GimbalCore::submitAngle(const AxisArray & rad, bool relative_to_frame)
 {
   if (!allFinite(rad)) {submitHold(); return;}
+  if (!motionPermitted()) {submitHold(); return;}
 
+  // Stored unclamped; tick() clamps against whatever limits are in force when
+  // the frame is actually built. Clamping only here would emit a now-illegal
+  // target if the limits were tightened after the command arrived.
   for (int a = 0; a < kNumAxes; ++a) {
-    double v = cfg_.invert[a] ? -rad[a] : rad[a];
-    if (cfg_.enforce_limits) {
-      v = std::clamp(v, cfg_.limit_min_rad[a], cfg_.limit_max_rad[a]);
-    }
-    target_[a] = v;
+    target_[a] = cfg_.invert[a] ? -rad[a] : rad[a];
   }
   mode_ = ControlMode::Position;
   relative_to_frame_ = relative_to_frame;
@@ -124,8 +168,18 @@ void GimbalCore::submitHold()
 
 void GimbalCore::onTelemetry(const Telemetry & t)
 {
+  // A sample that is not usable must not refresh the timestamp. Storing it
+  // would pair the previous angle with a fresh stamp, and the staleness gate
+  // would then judge limits against an old reading it believes is current --
+  // failing open in exactly the case the gate exists for.
+  if (!t.valid || !allFinite(t.angle_rad) || !std::isfinite(t.stamp)) {
+    telemetry_.valid = false;
+    have_continuous_ = false;
+    status_.angle_valid = false;
+    return;
+  }
+
   telemetry_ = t;
-  if (!t.valid) {return;}
 
   if (!have_continuous_) {
     continuous_ = t.angle_rad;
@@ -213,6 +267,19 @@ WireControl GimbalCore::tick()
         status_.blocked_at_max[a] = true;
         if (mode_ == ControlMode::Velocity && value[a] > 0.0) {value[a] = 0.0;}
       }
+      // Position targets are clamped here rather than on arrival, so limits
+      // tightened after a command still apply to it.
+      //
+      // In relative_to_frame this bounds the request but cannot guarantee the
+      // result: the target is measured against the mount while the limits and
+      // the telemetry behind them are measured against the horizon, and this
+      // class is given no frame attitude with which to relate the two. A
+      // vehicle on a slope can therefore reach an absolute angle outside these
+      // limits from a target that is inside them. The board's own limits are
+      // what actually protects the mount.
+      if (mode_ == ControlMode::Position) {
+        value[a] = std::clamp(value[a], cfg_.limit_min_rad[a], cfg_.limit_max_rad[a]);
+      }
     }
   }
 
@@ -222,7 +289,6 @@ WireControl GimbalCore::tick()
       const double deg_s = radToDeg(a == kPitch ? boardPitchFromRos(value[a]) : value[a]);
       w.speed[a] = sbgc_degs_to_units(deg_s);
       w.angle[a] = 0;
-      if (value[a] != 0.0) {w.moving = true;}
     }
     if (cfg_.roll_locked) {
       w.mode[kRoll] = SBGC_MODE_ANGLE;
@@ -241,7 +307,23 @@ WireControl GimbalCore::tick()
       w.mode[kRoll] = SBGC_MODE_ANGLE;
       w.angle[kRoll] = 0;
     }
-    w.moving = true;
+  }
+
+  // Derived from the frame that is actually going out, not from the intent
+  // behind it. Computing it earlier got this wrong three ways: a roll-only
+  // rate read as moving even though the roll lock discards it, a rate below
+  // half a wire LSB read as moving after converting to zero, and a roll-locked
+  // frame with every rate at zero read as still even though it commands roll
+  // back to level.
+  for (int a = 0; a < kNumAxes; ++a) {
+    const uint8_t m = w.mode[a];
+    if (m == SBGC_MODE_SPEED) {
+      if (w.speed[a] != 0) {w.moving = true;}
+    } else {
+      // Any angle mode names a target. Whether the axis actually turns depends
+      // on where it currently is, which makes this frame capable of motion.
+      w.moving = true;
+    }
   }
 
   return w;

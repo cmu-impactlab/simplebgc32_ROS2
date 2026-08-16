@@ -357,3 +357,170 @@ TEST(Unwrap, SurvivesManyTurnsInOneDirection)
   }
   EXPECT_NEAR(cont, deg(1080), 1e-6);
 }
+
+// ---- gate ordering -------------------------------------------------------
+//
+// These cover the case where a command is accepted while a gate is shut and
+// then becomes live when the gate opens, with nothing said in between.
+
+TEST(GateOrdering, ACommandGivenWhileDisarmedDoesNotSurviveArming)
+{
+  Fixture f;
+  f.core.setArmed(false);
+  f.rate(0.0, 0.0, deg(20));     // shouted at a disarmed gimbal
+  f.core.setArmed(true);         // ...and then armed, well inside the timeout
+  EXPECT_FALSE(f.core.tick().moving);
+}
+
+TEST(GateOrdering, ACommandGivenWhileControlIsDisallowedDoesNotSurvive)
+{
+  Fixture f;
+  f.core.setControlAllowed(false);
+  f.rate(0.0, 0.0, deg(20));
+  f.core.setControlAllowed(true);
+  EXPECT_FALSE(f.core.tick().moving);
+}
+
+TEST(GateOrdering, ACommandDoesNotSurviveALinkDropAndRecovery)
+{
+  // A link that drops and comes back inside the command timeout must not
+  // resume what was being commanded before it dropped.
+  Fixture f;
+  f.rate(0.0, 0.0, deg(20));
+  f.core.setLinkUp(false);
+  f.core.setLinkUp(true);
+  f.feedAngle(0.0, 0.0, 0.0);
+  EXPECT_FALSE(f.core.tick().moving);
+}
+
+// ---- telemetry validity --------------------------------------------------
+
+TEST(Telemetry, AnInvalidSampleDoesNotRefreshTheAngle)
+{
+  // Pairing the previous angle with a new timestamp is worse than having no
+  // angle: the staleness gate would believe the old reading is current.
+  Fixture f;
+  f.t += 1.0;
+  Telemetry bad;
+  bad.stamp = f.t;
+  bad.angle_rad = {{0.0, 0.0, 0.0}};
+  bad.valid = false;
+  f.core.onTelemetry(bad);
+
+  f.rate(0.0, 0.0, deg(20));
+  EXPECT_FALSE(f.core.tick().moving);
+  EXPECT_TRUE(f.core.status().limits_stale);
+}
+
+TEST(Telemetry, NonFiniteAnglesAndStampsAreRejected)
+{
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+
+  Fixture f;
+  Telemetry bad;
+  bad.stamp = f.t;
+  bad.angle_rad = {{0.0, nan, 0.0}};
+  bad.valid = true;
+  f.core.onTelemetry(bad);
+  f.rate(0.0, 0.0, deg(20));
+  EXPECT_FALSE(f.core.tick().moving) << "a NaN angle must not be trusted";
+  EXPECT_TRUE(f.core.status().limits_stale);
+
+  Fixture g;
+  Telemetry bad_stamp;
+  bad_stamp.stamp = nan;
+  bad_stamp.angle_rad = {{0.0, 0.0, 0.0}};
+  bad_stamp.valid = true;
+  g.core.onTelemetry(bad_stamp);
+  g.rate(0.0, 0.0, deg(20));
+  EXPECT_FALSE(g.core.tick().moving) << "a NaN stamp must not be trusted";
+  EXPECT_TRUE(g.core.status().limits_stale);
+}
+
+// ---- limits applied at emission -----------------------------------------
+
+TEST(Limits, TighteningThemAfterAnAngleCommandStillApplies)
+{
+  Fixture f;
+  f.core.submitAngle({{0.0, 0.0, deg(160)}}, false);
+  EXPECT_NEAR(sbgc_units_to_deg(f.core.tick().angle[kYaw]), 160.0, 0.05);
+
+  auto cfg = f.cfg;
+  cfg.limit_max_rad[kYaw] = deg(90);
+  f.core.setConfig(cfg);
+  EXPECT_NEAR(sbgc_units_to_deg(f.core.tick().angle[kYaw]), 90.0, 0.05)
+    << "the target must be re-clamped when the limits change";
+}
+
+// ---- the moving flag describes the emitted frame -------------------------
+
+TEST(MovingFlag, ARollOnlyRateIsNotMotionWhenRollIsLocked)
+{
+  Fixture f;
+  auto cfg = f.cfg;
+  cfg.roll_locked = true;
+  f.core.setConfig(cfg);
+
+  // The roll rate is discarded by the lock, but the lock itself commands roll
+  // to level, so the frame genuinely can move something.
+  f.rate(deg(20), 0.0, 0.0);
+  auto w = f.core.tick();
+  EXPECT_EQ(w.mode[kRoll], SBGC_MODE_ANGLE);
+  EXPECT_TRUE(w.moving) << "the roll lock commands an angle, which can move";
+
+  // With the lock off, a roll-only rate is ordinary motion.
+  cfg.roll_locked = false;
+  f.core.setConfig(cfg);
+  f.rate(deg(20), 0.0, 0.0);
+  EXPECT_TRUE(f.core.tick().moving);
+}
+
+TEST(MovingFlag, ARateTooSmallToEncodeIsNotReportedAsMotion)
+{
+  // Half a wire LSB is 0.06 deg/s. Anything under that converts to zero, and
+  // a frame carrying zero is not motion however it was asked for.
+  Fixture f;
+  auto cfg = f.cfg;
+  cfg.roll_locked = false;
+  f.core.setConfig(cfg);
+
+  f.rate(0.0, 0.0, deg(0.01));
+  auto w = f.core.tick();
+  EXPECT_EQ(w.speed[kYaw], 0);
+  EXPECT_FALSE(w.moving);
+}
+
+// ---- configuration is not trusted ---------------------------------------
+
+TEST(ConfigValidation, NonFiniteValuesFallBackToDefaults)
+{
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+
+  Fixture f;
+  auto cfg = f.cfg;
+  cfg.max_rate_rad_s[kYaw] = nan;
+  cfg.default_slew_rad_s = nan;
+  f.core.setConfig(cfg);
+
+  EXPECT_TRUE(std::isfinite(f.core.config().max_rate_rad_s[kYaw]));
+  EXPECT_TRUE(std::isfinite(f.core.config().default_slew_rad_s));
+
+  // And the frame that comes out is a real one, not a converted NaN.
+  f.rate(0.0, 0.0, deg(20));
+  auto w = f.core.tick();
+  EXPECT_NE(w.speed[kYaw], 0);
+}
+
+TEST(ConfigValidation, AReversedLimitRangeIsOrderedRatherThanStrandingTheAxis)
+{
+  Fixture f;
+  auto cfg = f.cfg;
+  cfg.limit_min_rad[kYaw] = deg(90);
+  cfg.limit_max_rad[kYaw] = deg(-90);
+  f.core.setConfig(cfg);
+
+  EXPECT_LT(f.core.config().limit_min_rad[kYaw], f.core.config().limit_max_rad[kYaw]);
+  f.feedAngle(0.0, 0.0, 0.0);
+  f.rate(0.0, 0.0, deg(20));
+  EXPECT_TRUE(f.core.tick().moving) << "an axis in the middle of its range must move";
+}
