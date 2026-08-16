@@ -4,6 +4,9 @@
 # does, so a node that starts late should still receive it rather than wait for
 # a reconnect.
 
+# stamp is when the identifying reply was received from the board, not when
+# this message was published — so a consumer can tell how old the identity is.
+# frame_id is left empty: board identity is not spatial data.
 std_msgs/Header header
 
 # Board hardware version. The board reports these packed, e.g. 31 meaning 3.1.

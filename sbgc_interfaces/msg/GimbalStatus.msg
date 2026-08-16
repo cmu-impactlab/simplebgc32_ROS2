@@ -20,10 +20,18 @@ bool board_responding
 # No hardware is attached and nothing is being written to a wire.
 bool simulated
 
-# Age of the most recent frame, in seconds. Grows without bound while the board
-# is silent, so it is usable as a staleness measure and not only as a flag.
-float32 last_frame_age
+# How long before header.stamp the most recent frame arrived. Expressed
+# relative to this message's own stamp rather than as an absolute time, so it
+# stays meaningful without the publisher and subscriber agreeing on a clock.
+# Grows without bound while the board is silent, so it is usable as a staleness
+# measure and not only as a flag.
+builtin_interfaces/Duration last_frame_age
 
+# Monotonic since the driver last entered the configured state, i.e. they reset
+# on cleanup and on a re-configure, but NOT on a reconnect — a link that keeps
+# dropping should show an accumulating timeout count rather than hide it. Both
+# saturate at their maximum instead of wrapping, so a consumer differencing
+# them never sees a negative jump.
 uint32 frames_received
 uint32 timeouts
 
@@ -53,12 +61,17 @@ uint8 limits_source
 float32[3] limit_min
 float32[3] limit_max
 
-# Per-axis: motion in the limited direction is currently being withheld.
-bool[3] axis_blocked
+# Per-axis, which END of the travel is currently withholding motion. Split into
+# two flags rather than one "blocked" boolean because a consumer recovering a
+# camera by hand needs to know which direction is still available; a single
+# flag says only that something is wrong. Both may be set at once if the
+# configured range is narrower than the measurement noise.
+bool[3] blocked_at_min
+bool[3] blocked_at_max
 
 # Limits are enabled but there is no fresh angle to judge them against, so
-# motion is held rather than allowed through unchecked. Distinct from
-# axis_blocked: "at the limit" and "cannot tell where the camera is" are
+# motion is held rather than allowed through unchecked. Distinct from the
+# blocked flags: "at the limit" and "cannot tell where the camera is" are
 # different situations with different fixes.
 bool limits_stale
 
@@ -83,12 +96,26 @@ uint8 deprecated_error_code
 
 # ---- board health --------------------------------------------------------
 
-uint16 cycle_time_us
+# The board's own control loop period, as it reports it.
+builtin_interfaces/Duration cycle_time
+
+# Counters maintained by the board, not by this driver, so they reset when the
+# board does and not when the driver does. They wrap at 16 bits; a consumer
+# differencing them must treat a decrease as a wrap or a board reset rather
+# than as a negative rate.
 uint16 i2c_error_count
 uint16 serial_error_count
+
 uint8 current_profile      # 0-based, as the board reports it
 bool rc_signal_present
+
+# Raw per-axis motor drive from the board, 0-255, in the order roll, pitch,
+# yaw. Not a torque, not a current, and not convertible to either without a
+# per-mount calibration this driver does not have — which is why it is passed
+# through unscaled rather than published as JointState effort.
 uint8[3] motor_power
 
-# Empty when healthy; a short human-readable reason otherwise.
+# Empty when healthy; a short human-readable reason otherwise. This is the same
+# string the driver puts in the DiagnosticStatus it publishes on /diagnostics,
+# produced once and copied, so the two channels cannot disagree.
 string fault

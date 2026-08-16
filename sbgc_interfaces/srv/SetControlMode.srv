@@ -10,14 +10,28 @@ uint8 MODE_VELOCITY=2  # rate targets            (board MODE_SPEED)
 
 uint8 mode
 
-# Measure angles against the frame the gimbal is mounted on rather than the
-# gravity horizon. Ignored in MODE_VELOCITY and MODE_IDLE.
-# Maps to the board's MODE_ANGLE_REL_FRAME.
+# Which reference the absolute angles in MODE_POSITION are measured against.
+#
+#   false  the gravity horizon. Roll and pitch are held level regardless of how
+#          the vehicle is tilted. This is the board's MODE_ANGLE.
+#   true   the gimbal's own mount, i.e. the frame the description package calls
+#          <prefix>base_link. Angles follow the vehicle as it tilts. This is
+#          the board's MODE_ANGLE_REL_FRAME.
+#
+# In both cases the signs are REP-103: right-handed, x forward, y left, z up,
+# so positive yaw turns the camera to the left and positive pitch raises it.
+# The board's pitch axis is positive downward; the driver converts, and that
+# conversion never reaches this interface.
+#
+# Ignored in MODE_VELOCITY and MODE_IDLE, but still reported back so a client
+# can see the setting that will apply when it next selects MODE_POSITION.
 bool relative_to_frame
 ---
 bool success
 string message
 
-# The mode actually in force after the call. On failure this is the unchanged
-# previous mode, so a client can resynchronise without a second round trip.
+# The settings actually in force after the call — both of them, so a client can
+# resynchronise completely after a failure, a driver restart, or another client
+# changing the mode. On failure these are the unchanged previous values.
 uint8 mode
+bool relative_to_frame

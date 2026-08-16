@@ -8,33 +8,49 @@
 # WARNING: calibrating a moving gimbal writes a wrong zero-rate bias into the
 # board, and the result is a camera that drifts continuously afterwards. That
 # is why the settle check exists and why this is never run automatically.
+#
+# Terminal states. A goal that is refused outright — motion not permitted, or a
+# calibration already running — is rejected in the goal callback and never
+# produces a Result at all, so there is no "rejected" result code here.
+# Accepted goals end as:
+#
+#   SUCCEEDED  result_code == RESULT_OK
+#   ABORTED    result_code == RESULT_NOT_STILL or RESULT_LINK_UNAVAILABLE
+#   CANCELED   result_code == RESULT_CANCELLED
+#
+# Cancellation. Accepted freely during PHASE_WAITING_TO_SETTLE, because nothing
+# has been sent to the board yet. Once PHASE_CALIBRATING begins the server does
+# NOT report CANCELED until the calibration window has elapsed: a CMD_CONTROL
+# would cancel the calibration on the board, but there is no frame this project
+# has verified that confirms it aborted, and reporting CANCELED while the board
+# may still be calibrating would be a false statement about hardware.
 
-# Wait up to this long for the gimbal to go still. 0 means use the driver's
+# Wait up to this long for the gimbal to go still. Zero means use the driver's
 # configured default. Exceeding it aborts without calibrating — a gimbal that
 # never settles must not be calibrated anyway.
-float32 settle_timeout
+builtin_interfaces/Duration settle_timeout
 
 # Calibrate as soon as the request arrives, without waiting for stillness.
 # Only for a caller that already knows the gimbal is stationary; the settle
 # check exists for a reason.
 bool skip_settle_check
 ---
-bool success
-
-# CANCELLED and NOT_STILL are ordinary outcomes, not faults.
+# There is deliberately no separate `success` field. It could only ever
+# duplicate result_code == RESULT_OK, and two fields that can disagree about
+# the same fact are worse than one.
 uint8 RESULT_OK=0
 uint8 RESULT_NOT_STILL=1        # settle timeout expired while still moving
 uint8 RESULT_LINK_UNAVAILABLE=2
 uint8 RESULT_CANCELLED=3
-uint8 RESULT_REJECTED=4         # motion not permitted, or already running
 
 uint8 result_code
 string message
 
 # How long the whole operation took, settle time included.
-float32 elapsed
+builtin_interfaces/Duration elapsed
 ---
-# WAITING_TO_SETTLE -> CALIBRATING is the normal progression.
+# WAITING_TO_SETTLE -> CALIBRATING is the normal progression. With
+# skip_settle_check set, the goal starts in CALIBRATING.
 uint8 PHASE_WAITING_TO_SETTLE=0
 uint8 PHASE_CALIBRATING=1
 
@@ -42,7 +58,8 @@ uint8 phase
 
 # Largest angular movement seen between two consecutive telemetry samples, in
 # radians. Meaningful while settling: it is the quantity being waited on, so a
-# client can show why it is still waiting rather than just that it is.
+# client can show why it is still waiting rather than just that it is. Held at
+# the last observed value once calibration begins.
 float32 motion
 
-float32 elapsed
+builtin_interfaces/Duration elapsed

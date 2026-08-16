@@ -1,13 +1,30 @@
-# Fetch the connected board's identity on demand.
+# Fetch the connected board's identity.
 #
-# The same information is published on the board_info topic with transient_local
-# durability, so most clients never need this. It exists for the case that
-# topic cannot serve: a caller that wants to know whether the board is
-# answering *right now*, rather than what it last said.
+# The same information is published on the board_info topic with
+# transient_local durability, so most clients never need this. It exists for a
+# caller that wants the identity as a request/response rather than having to
+# subscribe and wait.
+#
+# This is NOT a liveness probe. The driver polls CMD_BOARD_INFO on its own
+# schedule and this service answers from the most recent reply; it does not
+# issue a fresh request and block. Anything that needs to know whether the
+# board is answering right now must read board_responding and last_frame_age on
+# the GimbalStatus topic, which is what those fields are for. Claiming a live
+# check here would mean a cached identity could be returned as if it had just
+# been confirmed.
 ---
-# False when no board has identified itself yet, in which case info is unset
-# and message says why. A driver that has never heard from the board must say
-# so rather than return a zeroed struct that reads like firmware 0.0.
+# True when a board has identified itself at least once since the driver last
+# configured, and info therefore describes a real board. It does NOT mean the
+# board is currently connected — a board that has since gone silent still
+# reports true, with info.header.stamp showing how old the identification is.
+#
+# False leaves info default-constructed and message explains why. A driver that
+# has never heard from the board must say so rather than return a zeroed struct
+# that reads like firmware 0.0.
 bool available
 string message
+
+# info.header.stamp is when the identifying reply was received, not when this
+# service was called. info.header.frame_id is left empty: board identity is not
+# spatial data.
 BoardInfo info
