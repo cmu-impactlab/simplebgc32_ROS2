@@ -1,0 +1,53 @@
+# SimpleBGC32 gimbal driver parameters.
+#
+# The travel limits here are a convenience, not the real protection. Set the
+# authoritative limits in the SimpleBGC GUI: this software cannot stop the
+# board doing something its own configuration allows.
+
+/**:
+  ros__parameters:
+    # Empty asks the vendor GUI's saved settings and /dev/serial/by-id. Prefer
+    # a by-id path or a udev symlink over /dev/ttyUSB0, which renumbers
+    # depending on what else was plugged in first.
+    port: ""
+    baud_rate: 115200
+    simulate: false
+
+    frame_id: "gimbal_base_link"
+    imu_frame_id: "gimbal_imu_link"
+    joint_prefix: "gimbal_"
+
+    control_rate_hz: 30.0
+    telemetry_rate_hz: 25.0
+    status_rate_hz: 10.0
+
+    # If no valid command arrives within this window the driver holds. A
+    # publisher that dies stops the camera. Must be comfortably longer than one
+    # period of every upstream publisher.
+    command_timeout: 0.5
+    angle_fresh_timeout: 0.5
+    reconnect_delay: 2.0
+
+    # Both must be true before anything moves: this one at launch, the arm
+    # service at runtime. Left false so a fresh bringup is a monitor.
+    allow_control: false
+    start_armed: false
+    auto_motors_on: false
+
+    publish_imu: true
+    publish_tf: false
+
+    roll_mode: "locked"
+    default_slew_deg_s: 30.0
+
+    enforce_limits: true
+
+    # roll, pitch, yaw throughout.
+    max_rate_deg_s: [30.0, 45.0, 45.0]
+
+    # Measure these on the real mount before trusting them. The pitch range is
+    # asymmetric because most camera mounts run out of upward travel first.
+    limit_min_deg: [-45.0, -90.0, -170.0]
+    limit_max_deg: [45.0, 40.0, 170.0]
+
+    invert: [false, false, false]

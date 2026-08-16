@@ -1,0 +1,127 @@
+<?xml version="1.0"?>
+<!--
+  A 3-axis SimpleBGC-class camera gimbal.
+
+  The joint order is the physical one for a 43xx-class mount: yaw outermost,
+  then roll, then pitch innermost carrying the camera. Getting this order wrong
+  produces a TF tree that looks plausible and puts the camera in the wrong
+  place as soon as two axes move at once.
+
+  Conventions are REP-103: x forward, y left, z up, right-handed, radians. The
+  joint limits here must agree with the driver's limit_min_deg / limit_max_deg,
+  so both are passed in from the same place in the bringup package.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="sbgc_gimbal" params="
+      prefix:=gimbal_
+      parent:=base_link
+      *origin
+      yaw_min:=-2.967  yaw_max:=2.967
+      roll_min:=-0.785 roll_max:=0.785
+      pitch_min:=-1.571 pitch_max:=0.698
+      max_rate:=0.79">
+
+    <!-- Where the gimbal bolts to whatever carries it. -->
+    <link name="${prefix}base_link">
+      <visual>
+        <geometry><box size="0.06 0.06 0.02"/></geometry>
+        <material name="${prefix}case"><color rgba="0.25 0.25 0.28 1.0"/></material>
+      </visual>
+      <collision>
+        <geometry><box size="0.06 0.06 0.02"/></geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}mount_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}base_link"/>
+      <xacro:insert_block name="origin"/>
+    </joint>
+
+    <!-- Yaw: outermost axis, turning about the mount normal. -->
+    <link name="${prefix}yaw_link">
+      <visual>
+        <origin xyz="0 0 0.03"/>
+        <geometry><cylinder radius="0.02" length="0.06"/></geometry>
+        <material name="${prefix}arm"><color rgba="0.35 0.35 0.4 1.0"/></material>
+      </visual>
+    </link>
+    <joint name="${prefix}yaw_joint" type="revolute">
+      <parent link="${prefix}base_link"/>
+      <child link="${prefix}yaw_link"/>
+      <origin xyz="0 0 0.01"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="${yaw_min}" upper="${yaw_max}" effort="1.0" velocity="${max_rate}"/>
+    </joint>
+
+    <!-- Roll: about the forward axis. The board holds this level with gravity
+         unless it is told otherwise. -->
+    <link name="${prefix}roll_link">
+      <visual>
+        <geometry><box size="0.03 0.08 0.01"/></geometry>
+        <material name="${prefix}arm"/>
+      </visual>
+    </link>
+    <joint name="${prefix}roll_joint" type="revolute">
+      <parent link="${prefix}yaw_link"/>
+      <child link="${prefix}roll_link"/>
+      <origin xyz="0 0 0.06"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="${roll_min}" upper="${roll_max}" effort="1.0" velocity="${max_rate}"/>
+    </joint>
+
+    <!-- Pitch: innermost axis, and the one that carries the camera.
+
+         The axis is 0 -1 0, not 0 1 0, and that is load-bearing.
+
+         The driver reports this joint positive-UP, because an operator who
+         says "up" means up; that is also what the upstream tool does, and it
+         is why the driver inverts the board's own positive-downward pitch. In
+         a REP-103 body frame (x forward, y left, z up) a positive rotation
+         about +y takes x toward -z, which points the camera DOWN. Using +y
+         here would therefore have made the URDF disagree with the driver about
+         which way "up" is, and the camera in RViz would have tilted opposite
+         to the real one.
+
+         Negating the axis is how a joint's positive direction is expressed;
+         REP-103 constrains frame axes and units, not the sign of a joint. -->
+    <link name="${prefix}pitch_link">
+      <visual>
+        <geometry><box size="0.05 0.04 0.04"/></geometry>
+        <material name="${prefix}case"/>
+      </visual>
+    </link>
+    <joint name="${prefix}pitch_joint" type="revolute">
+      <parent link="${prefix}roll_link"/>
+      <child link="${prefix}pitch_link"/>
+      <origin xyz="0 0.04 0"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="${pitch_min}" upper="${pitch_max}" effort="1.0" velocity="${max_rate}"/>
+    </joint>
+
+    <link name="${prefix}camera_link"/>
+    <joint name="${prefix}camera_joint" type="fixed">
+      <parent link="${prefix}pitch_link"/>
+      <child link="${prefix}camera_link"/>
+      <origin xyz="0.025 0 0"/>
+    </joint>
+
+    <!--
+      The optical frame is NOT the camera link, and confusing the two is the
+      single most common way a gimbal integration ends up pointing sideways.
+
+      camera_link follows REP-103 like every other body frame: x forward,
+      y left, z up. The optical frame follows the image convention: z forward
+      along the view axis, x right across the image, y down. The rotation below
+      is what takes one to the other.
+    -->
+    <link name="${prefix}camera_optical_frame"/>
+    <joint name="${prefix}camera_optical_joint" type="fixed">
+      <parent link="${prefix}camera_link"/>
+      <child link="${prefix}camera_optical_frame"/>
+      <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+    </joint>
+
+  </xacro:macro>
+</robot>

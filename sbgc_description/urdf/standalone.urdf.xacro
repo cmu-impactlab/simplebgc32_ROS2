@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<!--
+  A gimbal on its own, for viewing the model and for checking the TF tree
+  without a robot around it. A real integration includes sbgc_gimbal.urdf.xacro
+  from its own description and gives it a proper parent instead.
+-->
+<robot name="sbgc_gimbal" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:arg name="prefix" default="gimbal_"/>
+
+  <xacro:include filename="$(find sbgc_description)/urdf/sbgc_gimbal.urdf.xacro"/>
+
+  <link name="base_link"/>
+
+  <xacro:sbgc_gimbal prefix="$(arg prefix)" parent="base_link">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:sbgc_gimbal>
+
+</robot>
