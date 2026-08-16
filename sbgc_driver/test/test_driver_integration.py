@@ -52,7 +52,7 @@ from std_srvs.srv import SetBool, Trigger
 sys.path.insert(
     0,
     os.path.join(
-        os.path.dirname(__file__), '..', '..', 'vendor', 'simplebgc32-control', 'test'))
+        os.path.dirname(__file__), '..', '..', 'sbgc_protocol', 'vendor', 'test'))
 
 from sbgc_sim import Board  # noqa: E402,I100
 

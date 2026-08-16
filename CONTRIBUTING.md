@@ -29,9 +29,16 @@ pass against the bug it was meant to catch until its fixture was corrected.
 
 ## The vendored protocol library
 
-`vendor/simplebgc32-control` is a submodule, not a copy. Protocol changes belong upstream;
-bump the submodule here afterwards. Upstream's own byte-level suite runs as part of this
-build precisely so a bump that changes the wire format fails here.
+`sbgc_protocol/vendor/` holds C sources copied from
+[simplebgc32-control](https://github.com/magdang/simplebgc32-control). They are copied, not
+submoduled, so that a plain clone of this repository builds.
+
+Do not edit them in place. A protocol change belongs upstream, where its own suite covers
+it; editing here forks the wire format silently, which is the exact failure this project
+already had once — a second, drifting reimplementation in another language. Take a newer
+upstream revision with `sbgc_protocol/vendor/sync.sh`, then run `make test`: upstream's own
+byte-level assertions build here, so a revision that changes the wire format fails in this
+build rather than on a gimbal.
 
 ## Before opening a pull request
 

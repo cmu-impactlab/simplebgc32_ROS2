@@ -4,19 +4,13 @@ project(sbgc_protocol C)
 find_package(ament_cmake REQUIRED)
 
 # --------------------------------------------------------------------------
-# The vendored upstream tree.
+# The vendored upstream sources.
 #
-# simplebgc32-control is a git submodule, not a copy, so there is exactly one
-# implementation of the wire protocol. If the submodule is missing the build
-# must fail with an explanation rather than a confusing "no such file".
+# Carried in-tree rather than referenced as a submodule, so that a plain clone
+# of this repository builds. See vendor/README.md for the upstream commit these
+# correspond to and vendor/sync.sh for taking a newer one.
 # --------------------------------------------------------------------------
-set(VENDOR "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/simplebgc32-control")
-
-if(NOT EXISTS "${VENDOR}/src/sbgc_api.c")
-  message(FATAL_ERROR
-    "Vendored simplebgc32-control not found at ${VENDOR}.\n"
-    "Run: git submodule update --init --recursive")
-endif()
+set(VENDOR "${CMAKE_CURRENT_SOURCE_DIR}/vendor")
 
 # --------------------------------------------------------------------------
 # Only the three translation units that decode or transmit the protocol are
@@ -81,8 +75,21 @@ ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 # --------------------------------------------------------------------------
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
-  # The vendored tree follows its own house style and is not ours to reformat.
-  list(APPEND AMENT_LINT_AUTO_EXCLUDE ament_cmake_copyright)
+
+  # Every source file in this package is a verbatim copy of upstream's. Style
+  # linting them would report on code this project does not own and must not
+  # reformat: an edit here forks the wire format silently, which is exactly the
+  # failure the copy-with-a-recorded-commit arrangement exists to prevent.
+  #
+  # The linters that cover files we DO own -- lint_cmake for this file, xmllint
+  # for package.xml -- are deliberately left enabled.
+  list(APPEND AMENT_LINT_AUTO_EXCLUDE
+    ament_cmake_copyright
+    ament_cmake_cppcheck
+    ament_cmake_cpplint
+    ament_cmake_flake8
+    ament_cmake_pep257
+    ament_cmake_uncrustify)
   ament_lint_auto_find_test_dependencies()
 
   add_executable(test_sbgc_api_vendor "${VENDOR}/test/test_sbgc_api.c")

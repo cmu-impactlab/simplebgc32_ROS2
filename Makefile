@@ -29,14 +29,9 @@ UIDGID := $(shell id -u):$(shell id -g)
 DOCKER_RUN = docker run --rm -v "$(CURDIR)":$(WS) -w $(WS) --network=host \
              --user $(UIDGID) -e HOME=/tmp
 
-.PHONY: all build test shell clean submodule image
+.PHONY: all build test shell clean image
 
 all: build
-
-# The build fails with a clear message if this has not been run, but doing it
-# here means a fresh clone needs one command rather than two.
-submodule:
-	@git submodule update --init --recursive
 
 # Rebuilding is a no-op once the layers are cached, so every target can depend
 # on this without anyone having to remember to run it.
@@ -49,19 +44,19 @@ image:
 # the container's /ws, so an install tree built this way is full of dangling
 # links when read from the host. The convenience it buys is not worth an
 # install/ directory that only resolves inside a container.
-build: submodule image
+build: image
 	$(DOCKER_RUN) $(IMAGE) bash -lc '\
 	  . /opt/ros/$(ROS_DISTRO)/setup.sh && \
 	  colcon build'
 
-test: submodule image
+test: image
 	$(DOCKER_RUN) $(IMAGE) bash -lc '\
 	  . /opt/ros/$(ROS_DISTRO)/setup.sh && \
 	  colcon build && \
 	  colcon test && \
 	  colcon test-result --verbose'
 
-shell: submodule image
+shell: image
 	$(DOCKER_RUN) -it $(IMAGE) bash -lc '\
 	  . /opt/ros/$(ROS_DISTRO)/setup.sh && exec bash'
 

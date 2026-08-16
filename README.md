@@ -3,9 +3,8 @@
 ROS 2 driver for SimpleBGC32 (BaseCam / AlexMos) 32-bit brushless gimbal controllers.
 
 Built on the byte-verified C protocol core from
-[simplebgc32-control](https://github.com/magdang/simplebgc32-control), vendored as a git
-submodule so the wire format has exactly one implementation shared by this driver and the
-upstream standalone tools.
+[simplebgc32-control](https://github.com/magdang/simplebgc32-control), carried in-tree so
+this repository is self-contained: clone it and build.
 
 > [!CAUTION]
 > This is experimental software that moves physical hardware. It offers no safety
@@ -28,34 +27,19 @@ Target distro: **ROS 2 Jazzy** (primary), **Lyrical Luth** (forward target).
 ## Getting the source
 
 ```bash
-git clone --recurse-submodules https://github.com/cmu-impactlab/simplebgc32_ROS2.git
+git clone https://github.com/cmu-impactlab/simplebgc32_ROS2.git
 ```
 
-**Mind the `--recurse-submodules`.** The wire protocol is not copied into this repository.
-It is a git *submodule* pointing at
-[simplebgc32-control](https://github.com/magdang/simplebgc32-control), so the protocol has
-exactly one implementation — shared with the upstream standalone tools — rather than a
-second copy here that quietly drifts out of step.
+That is all of it. The repository is self-contained: no submodules, and nothing else to
+fetch. Drop it into a colcon workspace and build.
 
-What git stores for a submodule is a URL and a commit, not the files themselves. A plain
-`git clone` therefore gives you `vendor/simplebgc32-control/` as an **empty directory**,
-and `sbgc_protocol` has nothing to compile. The build stops with:
-
-```
-CMake Error at CMakeLists.txt:16 (message):
-  Vendored simplebgc32-control not found at .../vendor/simplebgc32-control.
-  Run: git submodule update --init --recursive
-```
-
-That check exists so the failure names its own fix, rather than leaving you with a
-confusing `sbgc_api.h: No such file or directory` from the compiler. If you have already
-cloned without the flag, run exactly what it tells you:
-
-```bash
-git submodule update --init --recursive
-```
-
-The `make` targets do this for you, so `make test` works in a plain clone regardless.
+The SimpleBGC wire protocol is C code copied in under
+`sbgc_protocol/vendor/`, from
+[simplebgc32-control](https://github.com/magdang/simplebgc32-control) (MIT). It is copied
+rather than referenced so that cloning gives you a working tree every time.
+`sbgc_protocol/vendor/README.md` records which upstream commit these files came from, and
+`sbgc_protocol/vendor/sync.sh` takes a newer one when you want it. Do not edit those files
+in place — a protocol change belongs upstream, where its own byte-level tests cover it.
 
 ## Building
 
@@ -89,7 +73,7 @@ service — see [Safety](#safety).
 With no hardware, point it at the upstream simulator instead:
 
 ```bash
-python3 vendor/simplebgc32-control/test/sbgc_sim.py   # prints a pty path
+python3 sbgc_protocol/vendor/test/sbgc_sim.py   # prints a pty path
 ros2 launch sbgc_bringup gimbal.launch.py port:=/dev/pts/N allow_control:=true
 ```
 
