@@ -113,6 +113,27 @@ TEST(Watchdog, HoldFrameUsesSpeedZeroNotNoControl)
   }
 }
 
+TEST(Watchdog, HoldFrameCommandsNoMotionEvenWithRollLocked)
+{
+  // The roll lock commands MODE_ANGLE 0 at the slew rate, which turns an
+  // off-level gimbal. That belongs in an active rate command and never in a
+  // hold: this frame is what the watchdog, the deactivate transition and the
+  // stop service all send, and a stop that still commands an axis to move is
+  // not a stop.
+  Fixture f;
+  auto cfg = f.cfg;
+  cfg.roll_locked = true;
+  f.core.setConfig(cfg);
+
+  auto w = f.core.holdFrame();
+  for (int a = 0; a < sbgc_driver::kNumAxes; ++a) {
+    EXPECT_EQ(w.speed[a], 0) << "axis " << a << " must carry no rate at all";
+    EXPECT_EQ(w.angle[a], 0) << "axis " << a;
+  }
+  EXPECT_EQ(w.mode[kRoll], SBGC_MODE_SPEED);
+  EXPECT_FALSE(w.moving);
+}
+
 // ---- the arm gate --------------------------------------------------------
 
 TEST(ArmGate, BothKeysAreRequired)

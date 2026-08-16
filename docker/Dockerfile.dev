@@ -1,0 +1,26 @@
+# Development image: the official ROS base plus this repository's dependencies.
+#
+# It exists because the workstation this is developed on has no ROS install.
+# Layering the dependencies into an image once is much faster than running
+# rosdep on every build, and it pins what "the build environment" means so a
+# green build here means the same thing tomorrow.
+#
+# Not a deployment image. It carries compilers and test tooling.
+
+ARG ROS_DISTRO=jazzy
+FROM ros:${ROS_DISTRO}-ros-base
+ARG ROS_DISTRO
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ros-${ROS_DISTRO}-control-msgs \
+      ros-${ROS_DISTRO}-diagnostic-updater \
+      ros-${ROS_DISTRO}-generate-parameter-library \
+      ros-${ROS_DISTRO}-joint-state-publisher \
+      ros-${ROS_DISTRO}-launch-testing \
+      ros-${ROS_DISTRO}-launch-testing-ament-cmake \
+      ros-${ROS_DISTRO}-launch-testing-ros \
+      ros-${ROS_DISTRO}-robot-state-publisher \
+      ros-${ROS_DISTRO}-tf2-ros \
+      ros-${ROS_DISTRO}-xacro \
+      python3-serial \
+    && rm -rf /var/lib/apt/lists/*

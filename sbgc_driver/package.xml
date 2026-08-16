@@ -6,18 +6,28 @@
   <description>
     ROS 2 driver for SimpleBGC32 (BaseCam / AlexMos) camera gimbal controllers.
 
-    Publishes joint state, IMU, battery and diagnostics; accepts rate commands
-    as control_msgs/JointJog and angle targets as
-    control_msgs/FollowJointTrajectory. Every decision about what reaches the
-    serial port lives in GimbalCore, which has no ROS dependency and is tested
-    on its own.
+    A lifecycle node that publishes joint state, IMU, battery and diagnostics,
+    and accepts rate commands as control_msgs/JointJog. Every decision about
+    what reaches the serial port lives in GimbalCore, which has no ROS
+    dependency and is tested on its own.
   </description>
   <maintainer email="ymh1874@gmail.com">Yousef Hussein</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>generate_parameter_library</buildtool_depend>
 
+  <depend>control_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>diagnostic_updater</depend>
+  <depend>geometry_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>sbgc_interfaces</depend>
   <depend>sbgc_protocol</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_srvs</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_lint_auto</test_depend>

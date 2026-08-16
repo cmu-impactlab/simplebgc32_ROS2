@@ -11,7 +11,18 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(control_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(diagnostic_updater REQUIRED)
+find_package(generate_parameter_library REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
+find_package(sbgc_interfaces REQUIRED)
 find_package(sbgc_protocol REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 
 # ---------------------------------------------------------------------------
 # The decision layer. No ROS dependency on purpose: the interesting behaviour
@@ -24,13 +35,64 @@ target_include_directories(gimbal_core PUBLIC
   "$<INSTALL_INTERFACE:include>")
 target_link_libraries(gimbal_core PUBLIC sbgc_protocol::sbgc_protocol)
 
-install(DIRECTORY include/ DESTINATION include)
+# ---------------------------------------------------------------------------
+# Parameters, declared once in YAML and generated into a validated struct.
+# ---------------------------------------------------------------------------
+generate_parameter_library(sbgc_driver_parameters
+  src/sbgc_driver_parameters.yaml)
+
+# ---------------------------------------------------------------------------
+# The node, built as a component with a thin executable alongside it.
+# ---------------------------------------------------------------------------
+add_library(sbgc_driver_component SHARED
+  src/driver_node.cpp
+  src/sbgc_link.cpp)
+target_include_directories(sbgc_driver_component PUBLIC
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+  "$<INSTALL_INTERFACE:include>")
+target_link_libraries(sbgc_driver_component PUBLIC
+  gimbal_core
+  sbgc_driver_parameters)
+ament_target_dependencies(sbgc_driver_component PUBLIC
+  control_msgs
+  diagnostic_msgs
+  diagnostic_updater
+  geometry_msgs
+  rclcpp
+  rclcpp_components
+  rclcpp_lifecycle
+  sbgc_interfaces
+  sensor_msgs
+  std_srvs)
+rclcpp_components_register_node(sbgc_driver_component
+  PLUGIN "sbgc_driver::SbgcDriverNode"
+  EXECUTABLE sbgc_driver_component_node)
+
+add_executable(sbgc_driver_node src/main.cpp)
+target_link_libraries(sbgc_driver_node sbgc_driver_component)
+
+# Only the pieces another package can actually consume are exported.
+#
+# gimbal_core and the link wrapper are ordinary libraries and are exported.
+# The component is not: it is loaded by name through pluginlib, nothing links
+# it, and exporting it would drag in the generated parameter target, which is
+# an implementation detail rather than an interface. driver_node.hpp is
+# likewise not installed, because it includes the generated parameter header
+# and would not compile outside this build.
+install(FILES
+  include/sbgc_driver/gimbal_core.hpp
+  include/sbgc_driver/sbgc_link.hpp
+  DESTINATION include/sbgc_driver)
+
 install(TARGETS gimbal_core
   EXPORT export_${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin
   INCLUDES DESTINATION include)
+
+install(TARGETS sbgc_driver_component LIBRARY DESTINATION lib)
+install(TARGETS sbgc_driver_node DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_dependencies(sbgc_protocol)

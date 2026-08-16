@@ -14,7 +14,7 @@
 #   make test ROS_DISTRO=lyrical
 
 ROS_DISTRO ?= jazzy
-IMAGE      ?= ros:$(ROS_DISTRO)-ros-base
+IMAGE      ?= simplebgc32-ros2-dev:$(ROS_DISTRO)
 WS         := /ws
 
 # The ros images declare no USER, so without --user every build would write
@@ -29,7 +29,7 @@ UIDGID := $(shell id -u):$(shell id -g)
 DOCKER_RUN = docker run --rm -v "$(CURDIR)":$(WS) -w $(WS) --network=host \
              --user $(UIDGID) -e HOME=/tmp
 
-.PHONY: all build test shell clean submodule
+.PHONY: all build test shell clean submodule image
 
 all: build
 
@@ -38,23 +38,30 @@ all: build
 submodule:
 	@git submodule update --init --recursive
 
+# Rebuilding is a no-op once the layers are cached, so every target can depend
+# on this without anyone having to remember to run it.
+image:
+	@docker build -q -t $(IMAGE) \
+	  --build-arg ROS_DISTRO=$(ROS_DISTRO) \
+	  -f docker/Dockerfile.dev docker/ >/dev/null
+
 # Deliberately no --symlink-install. Its symlinks record absolute paths under
 # the container's /ws, so an install tree built this way is full of dangling
 # links when read from the host. The convenience it buys is not worth an
 # install/ directory that only resolves inside a container.
-build: submodule
+build: submodule image
 	$(DOCKER_RUN) $(IMAGE) bash -lc '\
 	  . /opt/ros/$(ROS_DISTRO)/setup.sh && \
 	  colcon build'
 
-test: submodule
+test: submodule image
 	$(DOCKER_RUN) $(IMAGE) bash -lc '\
 	  . /opt/ros/$(ROS_DISTRO)/setup.sh && \
 	  colcon build && \
 	  colcon test && \
 	  colcon test-result --verbose'
 
-shell: submodule
+shell: submodule image
 	$(DOCKER_RUN) -it $(IMAGE) bash -lc '\
 	  . /opt/ros/$(ROS_DISTRO)/setup.sh && exec bash'
 

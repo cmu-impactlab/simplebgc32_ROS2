@@ -1,0 +1,191 @@
+sbgc_driver:
+  port:
+    type: string
+    default_value: ""
+    read_only: true
+    description: >
+      Serial device. Empty asks the vendor GUI's saved settings and
+      /dev/serial/by-id for one. Prefer a by-id path or a udev symlink over
+      /dev/ttyUSB0, which renumbers depending on what was plugged in first.
+
+  baud_rate:
+    type: int
+    default_value: 115200
+    read_only: true
+    description: "Serial line rate. Must match the board's profile."
+    validation:
+      one_of<>: [[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]]
+
+  simulate:
+    type: bool
+    default_value: false
+    read_only: true
+    description: >
+      Open no device. Frames are encoded and reported but never written, so the
+      whole node can be exercised with no hardware attached.
+
+  frame_id:
+    type: string
+    default_value: "gimbal_base_link"
+    description: "Frame the gimbal is mounted in."
+
+  imu_frame_id:
+    type: string
+    default_value: "gimbal_imu_link"
+    description: "Frame of the board's own IMU."
+
+  joint_prefix:
+    type: string
+    default_value: "gimbal_"
+    read_only: true
+    description: >
+      Prepended to roll_joint / pitch_joint / yaw_joint, so more than one
+      gimbal can share a robot without their joint names colliding.
+
+  control_rate_hz:
+    type: double
+    default_value: 30.0
+    description: "How often a CMD_CONTROL frame is sent."
+    validation:
+      bounds<>: [1.0, 200.0]
+
+  telemetry_rate_hz:
+    type: double
+    default_value: 25.0
+    description: "How often CMD_REALTIME_DATA_3 is requested."
+    validation:
+      bounds<>: [1.0, 200.0]
+
+  status_rate_hz:
+    type: double
+    default_value: 10.0
+    description: "How often GimbalStatus and diagnostics are published."
+    validation:
+      bounds<>: [0.1, 100.0]
+
+  command_timeout:
+    type: double
+    default_value: 0.5
+    description: >
+      Hold if no valid command arrives within this window. This is the
+      fail-closed guarantee: a publisher that dies stops the camera. Must be
+      comfortably longer than one period of every upstream publisher.
+    validation:
+      gt<>: [0.0]
+
+  angle_fresh_timeout:
+    type: double
+    default_value: 0.5
+    description: >
+      How old the board's reported angle may be and still be treated as where
+      the camera is. Beyond this, limited motion is held rather than judged
+      against a reading that may be frozen.
+    validation:
+      gt<>: [0.0]
+
+  reconnect_delay:
+    type: double
+    default_value: 2.0
+    description: "Wait this long before retrying a lost serial link."
+    validation:
+      gt<>: [0.0]
+
+  allow_control:
+    type: bool
+    default_value: false
+    read_only: true
+    description: >
+      The process-level half of the motion gate. With this false the node is a
+      monitor: it will publish telemetry and refuse to move anything. Read-only
+      on purpose, so nothing can talk the node into moving at runtime.
+
+  start_armed:
+    type: bool
+    default_value: false
+    description: "Arm at activation instead of waiting for the arm service."
+
+  auto_motors_on:
+    type: bool
+    default_value: false
+    description: >
+      Power the motors at activation. Off by default: bringing a gimbal up
+      under power is a decision an operator should make deliberately.
+
+  publish_imu:
+    type: bool
+    default_value: true
+    description: >
+      Publish sensor_msgs/Imu from the board's raw accelerometer and gyroscope.
+      Orientation comes from the board's own angles and is trustworthy; the
+      mapping of the raw vectors onto REP-103 axes has NOT been verified
+      against hardware. See the README before consuming the vectors.
+
+  publish_tf:
+    type: bool
+    default_value: false
+    description: >
+      Broadcast the gimbal joint transforms directly. Off by default because
+      robot_state_publisher should own TF: it already has the URDF, and two
+      publishers of the same transform is a conflict, not redundancy.
+
+  roll_mode:
+    type: string
+    default_value: "locked"
+    description: >
+      locked holds roll at the gravity horizon during rate commands, which
+      actively re-levels it; free passes the commanded roll rate through. A
+      zero roll rate is not the same as level - it holds whatever roll the
+      gimbal drifted to.
+    validation:
+      one_of<>: [["locked", "free"]]
+
+  default_slew_deg_s:
+    type: double
+    default_value: 30.0
+    description: "Slew rate used for absolute angle targets and the roll lock."
+    validation:
+      bounds<>: [1.0, 120.0]
+
+  enforce_limits:
+    type: bool
+    default_value: true
+    description: >
+      Apply the travel limits below. These are a convenience, not the real
+      protection: set the authoritative limits in the SimpleBGC GUI, because
+      this software cannot stop the board doing what its own configuration
+      allows.
+
+  max_rate_deg_s:
+    type: double_array
+    default_value: [30.0, 45.0, 45.0]
+    description: "Per-axis rate ceiling, in roll, pitch, yaw order."
+    validation:
+      fixed_size<>: 3
+
+  limit_min_deg:
+    type: double_array
+    default_value: [-45.0, -90.0, -170.0]
+    description: >
+      Per-axis lower travel limit in roll, pitch, yaw order. Measure these on
+      the real mount before trusting them.
+    validation:
+      fixed_size<>: 3
+
+  limit_max_deg:
+    type: double_array
+    default_value: [45.0, 40.0, 170.0]
+    description: >
+      Per-axis upper travel limit. The pitch range is asymmetric because most
+      camera mounts run out of upward travel first.
+    validation:
+      fixed_size<>: 3
+
+  invert:
+    type: bool_array
+    default_value: [false, false, false]
+    description: >
+      Per-axis sign flip for a mount wired backwards, in roll, pitch, yaw
+      order. This is NOT where the board's positive-downward pitch is handled;
+      the driver already converts that.
+    validation:
+      fixed_size<>: 3

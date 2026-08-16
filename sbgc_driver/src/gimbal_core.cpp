@@ -161,11 +161,14 @@ WireControl GimbalCore::holdFrame() const
     w.speed[a] = 0;
     w.angle[a] = 0;
   }
-  if (cfg_.roll_locked) {
-    w.mode[kRoll] = SBGC_MODE_ANGLE;
-    w.speed[kRoll] = sbgc_degs_to_units(radToDeg(cfg_.default_slew_rad_s));
-    w.angle[kRoll] = 0;
-  }
+  // The roll lock is deliberately NOT applied here, even when configured.
+  //
+  // Locking roll means commanding MODE_ANGLE 0 at the slew rate, which makes an
+  // off-level gimbal turn. That is wanted while an operator is driving the
+  // other axes, and wrong in a hold: this frame is what the watchdog, the
+  // deactivate transition and the stop service all send, and a stop that still
+  // commands an axis to move is not a stop. sbgc_stop() upstream zeroes every
+  // axis for the same reason.
   w.moving = false;
   return w;
 }
