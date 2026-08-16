@@ -1,0 +1,17 @@
+# Stable device name for a SimpleBGC32 controller.
+#
+# /dev/ttyUSB0 renumbers depending on what else was plugged in first, so a
+# driver configured against it will one day open a different device. Install
+# this into /etc/udev/rules.d/ and use /dev/simplebgc instead:
+#
+#   sudo cp 99-simplebgc.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# The vendor and product below are for the CH340 adapter fitted to the boards
+# this was developed against. Check yours with `lsusb` and edit to match -- and
+# if more than one CH340 device is attached, add a serial number match too,
+# because these two IDs alone are not unique to a gimbal.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="simplebgc", MODE="0660", GROUP="dialout"
+
+# Silicon Labs CP210x, fitted to some other boards.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="simplebgc", MODE="0660", GROUP="dialout"
