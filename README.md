@@ -57,6 +57,14 @@ make test ROS_DISTRO=lyrical   # forward target
 make shell                     # interactive container, workspace mounted
 ```
 
+## Commissioning against real hardware
+
+If this driver has not yet been run against your gimbal, follow
+[`docs/HARDWARE_TEST_PLAN.md`](docs/HARDWARE_TEST_PLAN.md) rather than the quick start
+below. It goes through the upstream C tool first, then the ROS package, in an order that
+puts the cheapest failures earliest — and it lists what has and has not been verified on
+hardware, which is not the same thing as what is tested.
+
 ## Running
 
 ```bash
