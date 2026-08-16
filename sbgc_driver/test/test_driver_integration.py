@@ -301,6 +301,49 @@ class TestGimbalDriver(unittest.TestCase):
             self.node.transition(Transition.TRANSITION_ACTIVATE)
             self.node.spin_for(1.0)
 
+    def test_calibration_suppresses_control_frames(self):
+        # The board treats any CMD_CONTROL as a cancellation of a running gyro
+        # calibration. The driver sends one every 33 ms in normal operation, so
+        # without suppression the calibration was aborted on the board within a
+        # tick while the action still reported success 4.5 s later.
+        client = ActionClient(self.node, CalibrateGyro, '/sbgc_driver/calibrate_gyro')
+        self.assertTrue(
+            client.wait_for_server(timeout_sec=10.0), 'no calibrate_gyro server')
+
+        goal = CalibrateGyro.Goal()
+        goal.skip_settle_check = True      # start calibrating immediately
+        send = client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self.node, send, timeout_sec=10.0)
+        handle = send.result()
+        self.assertIsNotNone(handle)
+        self.assertTrue(handle.accepted, 'calibration goal was rejected')
+
+        result_future = handle.get_result_async()
+        self.node.spin_for(0.6)            # let the suppression take effect
+
+        _board.clear('controls')
+        self.node.spin_for(2.0)            # squarely inside the 4.5 s window
+        during = _board.snapshot('controls')
+
+        rclpy.spin_until_future_complete(self.node, result_future, timeout_sec=15.0)
+        self.assertIsNotNone(result_future.result(), 'calibration never finished')
+
+        self.assertEqual(
+            len(during), 0,
+            f'{len(during)} control frames reached the board mid-calibration; '
+            'each one cancels it')
+        self.assertEqual(
+            result_future.result().result.result_code,
+            CalibrateGyro.Result.RESULT_OK)
+
+        # ...and control resumes once it is over, or the gimbal would be left
+        # with no commands at all.
+        _board.clear('controls')
+        self.node.spin_for(1.0)
+        self.assertGreater(
+            len(_board.snapshot('controls')), 0,
+            'control frames did not resume after calibration')
+
 
 @launch_testing.post_shutdown_test()
 class TestShutdown(unittest.TestCase):
