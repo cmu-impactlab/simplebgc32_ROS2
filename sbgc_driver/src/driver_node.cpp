@@ -454,15 +454,22 @@ void SbgcDriverNode::publishTelemetry()
     imu.header.frame_id = params_.imu_frame_id;
     imu.orientation = q.quaternion;
 
-    // The specification gives ACC_DATA as 1/512 G "expressed in END coordinate
-    // system, sign is inverted", and GYRO_DATA as 0.06103701895 deg/s. The
-    // scaling and the documented sign inversion are applied; the mapping of
-    // the board's axis order onto REP-103 body axes has NOT been confirmed
-    // against a physical board, so these vectors are published in the board's
-    // own IMU frame and the README says so.
-    imu.linear_acceleration.x = -rt.acc_raw[SBGC_ROLL] * SBGC_ACC_UNIT_G * kG;
-    imu.linear_acceleration.y = -rt.acc_raw[SBGC_PITCH] * SBGC_ACC_UNIT_G * kG;
-    imu.linear_acceleration.z = -rt.acc_raw[SBGC_YAW] * SBGC_ACC_UNIT_G * kG;
+    // ACC_DATA is 1/512 G and GYRO_DATA is 0.06103701895 deg/s, both per the
+    // protocol specification.
+    //
+    // The specification also describes the accelerometer as "expressed in END
+    // coordinate system, sign is inverted", which this code previously read as
+    // an instruction to negate. Measured against a board 3.1 / firmware 2.63b0
+    // sitting at rest, that was wrong: the board reports +1.02 G on its
+    // vertical axis, and sensor_msgs/Imu wants proper acceleration, which is
+    // +9.81 upward at rest. Negating published -9.86 where +9.81 belongs.
+    // Passed through unnegated, a stationary gimbal now reads +9.8 on z.
+    //
+    // The magnitude is confirmed by the same measurement: the raw vector is
+    // 522 counts long, and 522/512 = 1.02 G.
+    imu.linear_acceleration.x = rt.acc_raw[SBGC_ROLL] * SBGC_ACC_UNIT_G * kG;
+    imu.linear_acceleration.y = rt.acc_raw[SBGC_PITCH] * SBGC_ACC_UNIT_G * kG;
+    imu.linear_acceleration.z = rt.acc_raw[SBGC_YAW] * SBGC_ACC_UNIT_G * kG;
 
     imu.angular_velocity.x = degToRad(rt.gyro_raw[SBGC_ROLL] * SBGC_GYRO_UNIT_DEGS);
     imu.angular_velocity.y = degToRad(rt.gyro_raw[SBGC_PITCH] * SBGC_GYRO_UNIT_DEGS);
