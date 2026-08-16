@@ -106,6 +106,13 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_gimbal_core test/test_gimbal_core.cpp)
   target_link_libraries(test_gimbal_core gimbal_core)
+
+  # The integration suite drives the real node against the upstream project's
+  # own board simulator on a pty: real framing, real lifecycle transitions, no
+  # mock that agrees with whatever the code happens to do. Isolated so it does
+  # not see, or get seen by, anything else running concurrently.
+  find_package(launch_testing_ament_cmake REQUIRED)
+  add_launch_test(test/test_driver_integration.py TIMEOUT 180)
 endif()
 
 ament_package()
