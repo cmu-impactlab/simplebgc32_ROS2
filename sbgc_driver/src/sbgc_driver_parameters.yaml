@@ -133,8 +133,9 @@ sbgc_driver:
       gimbals on identical firmware can present the same physical motion on
       different axes, so there is no value here that is correct everywhere.
       The default passes the board's own order through unchanged. See the
-      README for how to measure yours; it takes about a minute and needs no
-      motion.
+      README for how to measure yours; it takes about a minute and is entirely
+      read-only, though two of its three steps ask you to move the gimbal by
+      hand.
     validation:
       fixed_size<>: 3
       element_bounds<>: [0, 2]
@@ -144,8 +145,10 @@ sbgc_driver:
     default_value: [1.0, 1.0, 1.0]
     description: >
       Per-ROS-axis multiplier applied after imu_axis_map. Normally +1.0 or
-      -1.0. Any finite non-zero value is accepted, so a mount whose sensor
-      needs scaling can be described without patching the driver.
+      -1.0. Any non-zero value up to a magnitude of 1e6 is accepted, so a mount
+      whose sensor needs a unit correction can be described without patching
+      the driver. The bound is not cosmetic: a raw count reaches 32767, and a
+      merely-finite multiplier can overflow to infinity once scaled.
 
       sensor_msgs/Imu carries proper acceleration, so a correctly configured
       gimbal at rest and level reads about +9.81 on linear_acceleration.z. If

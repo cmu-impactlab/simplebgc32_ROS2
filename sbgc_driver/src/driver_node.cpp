@@ -109,8 +109,9 @@ AxisMapping SbgcDriverNode::buildImuMapping() const
     // that is wrong, which is worse than refusing the configuration.
     RCLCPP_ERROR(
       get_logger(),
-      "imu_axis_map must be a permutation of 0,1,2 and imu_axis_sign must be "
-      "finite and non-zero; falling back to the identity mapping");
+      "imu_axis_map must be a permutation of 0,1,2 and each imu_axis_sign must "
+      "be non-zero with magnitude at most %g; falling back to the identity "
+      "mapping", kMaxAxisSign);
     return AxisMapping{};
   }
   return m;
@@ -243,10 +244,11 @@ CallbackReturn SbgcDriverNode::on_activate(const rclcpp_lifecycle::State & state
 {
   LifecycleNode::on_activate(state);
 
+  // Mirrors the core exactly. allow_control is reported separately, and
+  // folding it in here made the two disagree when start_armed was set without
+  // it -- the core's arm bit true, the topic saying false.
   core_->setArmed(params_.start_armed);
-  // Kept in step with the core, or the status topic reports an arm state the
-  // driver does not actually hold.
-  armed_ = params_.start_armed && params_.allow_control;
+  armed_ = params_.start_armed;
 
   if (params_.auto_motors_on) {
     if (link_.send(SBGC_CMD_MOTORS_ON)) {motors_on_ = true;}
@@ -794,10 +796,16 @@ void SbgcDriverNode::srvArm(
     // The core drops its own pending command on disarm, but a running
     // trajectory would re-submit its target on the next tick and start moving
     // again the moment the operator re-armed.
+    //
+    // A frame is sent as well as the goals being ended. Without it the gimbal
+    // keeps obeying whatever rate was last transmitted until the next tick,
+    // and a disarm that leaves the camera moving is not a disarm.
+    core_->submitHold();
+    if (link_.isOpen()) {link_.sendControl(core_->holdFrame());}
     abortActiveGoals("disarmed");
   }
   core_->setArmed(req->data);
-  armed_ = req->data && params_.allow_control;
+  armed_ = req->data;
   res->success = true;
   res->message = req->data ? "armed" : "disarmed";
   RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
@@ -820,17 +828,25 @@ void SbgcDriverNode::srvStop(
   // Deliberately not gated on arm. The gate exists to prevent unwanted motion,
   // and refusing to stop would invert its purpose.
   //
-  // Anything in flight is ended first. A running trajectory re-submits its
-  // target every cycle, so clearing the core alone would have been undone
-  // 33 ms later and the stop would not have stuck.
-  abortActiveGoals("stopped by request");
   core_->submitHold();
+
   if (!link_.isOpen()) {
+    // Goals are still ended: the driver has stopped acting on them either way,
+    // and leaving a client waiting on a gimbal nobody is commanding is worse
+    // than telling it so.
+    abortActiveGoals("stop requested, but the gimbal is not connected");
     res->success = false;
     res->message = "gimbal not connected; nothing could be sent";
     return;
   }
+
+  // The frame goes first, so a goal is never told it was interrupted before
+  // anything was actually sent to interrupt it. A running trajectory
+  // re-submits its target every cycle, so the goals are ended immediately
+  // afterwards or the stop would be undone 33 ms later.
   res->success = link_.sendControl(core_->holdFrame());
+  abortActiveGoals(
+    res->success ? "stopped by request" : "stop requested, but it could not be sent");
   res->message = res->success ? "stopped" : link_.lastError();
 }
 
@@ -1054,7 +1070,10 @@ void SbgcDriverNode::calibFinish(uint8_t code, const std::string & message)
   // then interrupted by a stop reaches here with a non-cancel code, which is
   // exactly the mismatch this ordering avoids.
   if (calib_handle_->is_canceling()) {
-    result->result_code = Calibrate::Result::RESULT_CANCELLED;
+    // canceled() is the only terminal method rclcpp_action permits from
+    // CANCELING, so the METHOD is forced. The code is not: a goal that was
+    // cancelled and then lost its link really did fail on the link, and
+    // relabelling that as a clean cancellation would hide it.
     calib_handle_->canceled(result);
   } else if (code == Calibrate::Result::RESULT_OK) {
     calib_handle_->succeed(result);
@@ -1091,8 +1110,18 @@ void SbgcDriverNode::calibTick()
   const double t = nowSeconds();
 
   if (!link_.isOpen()) {
-    calibFinish(Calibrate::Result::RESULT_LINK_UNAVAILABLE, "the serial link went away");
-    return;
+    // Only bail out early while settling, where nothing has been sent yet.
+    //
+    // Once the board is calibrating it carries on regardless of our link, and
+    // with the port gone there is no CMD_CONTROL to recall it. Reporting a
+    // result now would tell the client the operation is over while the gimbal
+    // must still be held still -- and a client that then moved it would corrupt
+    // the very bias this is measuring. So the window is waited out and the
+    // outcome reported honestly below.
+    if (calib_phase_ == CalibPhase::Settling) {
+      calibFinish(Calibrate::Result::RESULT_LINK_UNAVAILABLE, "the serial link went away");
+      return;
+    }
   }
 
   auto feedback = std::make_shared<Calibrate::Feedback>();
@@ -1168,7 +1197,13 @@ void SbgcDriverNode::calibTick()
   calib_handle_->publish_feedback(feedback);
 
   if ((t - calib_phase_started_) >= kCalibSeconds) {
-    if (calib_cancel_requested_) {
+    if (!link_.isOpen()) {
+      // The board was calibrating when the link went; whether it finished is
+      // not something this driver can claim either way.
+      calibFinish(
+        Calibrate::Result::RESULT_LINK_UNAVAILABLE,
+        "the link went away mid-calibration; the outcome on the board is unknown");
+    } else if (calib_cancel_requested_) {
       calibFinish(
         Calibrate::Result::RESULT_CANCELLED,
         "cancelled, but the calibration had already started and was allowed to finish");

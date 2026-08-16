@@ -14,7 +14,6 @@ upstream standalone tools.
 > [Safety](#safety) before connecting a gimbal that can hit something.
 
 Target distro: **ROS 2 Jazzy** (primary), **Lyrical Luth** (forward target).
-Unofficial; not affiliated with BaseCam Electronics / AlexMos.
 
 ## Packages
 
@@ -22,9 +21,9 @@ Unofficial; not affiliated with BaseCam Electronics / AlexMos.
 |---|---|
 | `sbgc_protocol` | The vendored C protocol core as an ament library. No ROS dependency. |
 | `sbgc_interfaces` | Messages, services and actions. Depends on nothing else here. |
-| `sbgc_driver` | The lifecycle node, plus `GimbalCore` — every motion decision, ROS-free and separately tested. |
+| `sbgc_driver` | The lifecycle node, plus `GimbalCore`|
 | `sbgc_description` | URDF/xacro and TF frames. |
-| `sbgc_bringup` | Launch files and configuration. The only package that depends broadly. |
+| `sbgc_bringup` | Launch files and configuration.|
 
 ## Getting the source
 
@@ -32,7 +31,7 @@ The protocol library is a submodule, so a plain clone leaves it empty and the bu
 with an explanation.
 
 ```bash
-git clone --recurse-submodules <this-repo>
+git clone --recurse-submodules https://github.com/cmu-impactlab/simplebgc32_ROS2.git
 # or, in an existing clone:
 git submodule update --init --recursive
 ```
@@ -128,11 +127,6 @@ not of the protocol — two gimbals on identical firmware can present the same p
 motion on different axes and with different signs. So the mapping is
 `imu_axis_map` and `imu_axis_sign` rather than a constant in the source.
 
-The scaling is not in question: 1/512 G per accelerometer count and 0.06103701895 °/s per
-gyro count, both from the specification and both confirmed against a board 3.1 running
-firmware 2.63 b0, where a resting gimbal produced a raw vector 522 counts long
-(522/512 = 1.02 G).
-
 **Measuring yours** takes about a minute and is entirely read-only: leave
 `allow_control:=false` and the motors off throughout, and move the gimbal by hand. Nothing
 below commands the motors — with the power off the stages turn freely.
@@ -208,11 +202,7 @@ cutoff, and prefer bounded angle targets (`FollowJointTrajectory`) over continuo
 commands (`JointJog`).
 
 The travel limits in this driver are a convenience, not the real protection. Set the
-authoritative limits in the SimpleBGC GUI: this software cannot stop the board doing
-something its own configuration allows.
-
-Please do not describe any software interlock, watchdog, travel limit or stop command in
-this repository as a safety guarantee.
+authoritative limits in the [SimpleBGC GUI](https://www.basecamelectronics.com/downloads/32bit/)
 
 ## Design notes
 
@@ -243,12 +233,3 @@ services and the action callbacks alike, since those read lifecycle state too.
 make test
 ```
 
-- Protocol: upstream's 37 byte-level assertions against BaseCam's published examples, run
-  as a CTest so a submodule bump that changes the wire format fails this build.
-- Decisions: 36 gtest cases on `GimbalCore`.
-- Integration: 10 `launch_testing` cases driving the real node against the upstream board
-  simulator on a pty.
-
-## Licence
-
-MIT.

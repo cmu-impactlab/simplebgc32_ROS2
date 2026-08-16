@@ -43,7 +43,11 @@ uint8 RESULT_OK=0
 uint8 RESULT_NOT_STILL=1        # settle timeout expired while still moving
 uint8 RESULT_LINK_UNAVAILABLE=2
 uint8 RESULT_CANCELLED=3
-uint8 RESULT_INTERRUPTED=4      # ended by stop, disarm, or a lifecycle change
+# The driver stopped running this goal, because of a stop, a disarm or a
+# lifecycle change. Whether the BOARD's own calibration was also interrupted
+# depends on whether a control frame reached it, which the driver cannot
+# confirm; treat the calibration as not having happened either way.
+uint8 RESULT_INTERRUPTED=4
 
 uint8 result_code
 string message

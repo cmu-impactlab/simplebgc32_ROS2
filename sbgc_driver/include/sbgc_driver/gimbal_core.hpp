@@ -126,14 +126,14 @@ struct AxisMapping
   std::array<int, kNumAxes> source{{0, 1, 2}};
 
   // Multiplier applied after the permutation, per output axis. Normally +1 or
-  // -1; any finite non-zero value is accepted so a mount with a scaled sensor
-  // can be described without patching the driver.
+  // -1; any non-zero value up to kMaxAxisSign is accepted, so a mount needing a
+  // unit correction can be described without patching the driver.
   AxisArray sign{{1.0, 1.0, 1.0}};
 
-  // True when `source` is a permutation of {0,1,2} and every sign is finite
-  // and non-zero. A mapping that is not valid must not be applied: silently
-  // dropping or duplicating an axis would produce a plausible-looking vector
-  // that is wrong, which is worse than refusing it.
+  // True when `source` is a permutation of {0,1,2} and every sign is non-zero
+  // with magnitude at most kMaxAxisSign. A mapping that is not valid must not
+  // be applied: silently dropping or duplicating an axis would produce a
+  // plausible-looking vector that is wrong, which is worse than refusing it.
   bool valid() const;
 
   // Apply to a raw board triple, scaling each component by `scale`. Falls back
