@@ -249,6 +249,11 @@ CallbackReturn SbgcDriverNode::on_deactivate(const rclcpp_lifecycle::State & sta
   core_->setArmed(false);
   if (link_.isOpen()) {link_.sendControl(core_->holdFrame());}
 
+  // Before the timers go: they are the only thing advancing the action state
+  // machines, so a goal left in flight here would never be resolved and its
+  // client would wait for an answer that could not arrive.
+  abortActiveGoals("the driver was deactivated");
+
   control_timer_.reset();
   telemetry_timer_.reset();
   board_info_timer_.reset();
@@ -280,11 +285,9 @@ CallbackReturn SbgcDriverNode::on_cleanup(const rclcpp_lifecycle::State &)
   level_srv_.reset();
   control_mode_srv_.reset();
   board_info_srv_.reset();
+  abortActiveGoals("the driver was cleaned up");
   calib_server_.reset();
   traj_server_.reset();
-  calib_handle_.reset();
-  traj_handle_.reset();
-  calib_phase_ = CalibPhase::Idle;
 
   board_info_published_ = false;
   motors_on_ = false;
@@ -828,6 +831,22 @@ void SbgcDriverNode::srvGetBoardInfo(
 
 
 // ------------------------------------------------------------------ actions
+
+void SbgcDriverNode::abortActiveGoals(const std::string & why)
+{
+  if (calib_handle_) {
+    // Reported as a link failure rather than a cancellation: nobody cancelled
+    // it, and RESULT_OK would claim a calibration that did not finish.
+    calibFinish(Calibrate::Result::RESULT_LINK_UNAVAILABLE, why);
+  }
+  calib_phase_ = CalibPhase::Idle;
+  calib_handle_.reset();
+
+  if (traj_handle_) {
+    trajFinish(Trajectory::Result::INVALID_GOAL, why);
+  }
+  traj_handle_.reset();
+}
 
 rclcpp_action::GoalResponse SbgcDriverNode::calibGoal(
   const rclcpp_action::GoalUUID &, std::shared_ptr<const Calibrate::Goal>)

@@ -36,9 +36,11 @@ from lifecycle_msgs.srv import ChangeState
 import pytest
 
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 
+from sbgc_interfaces.action import CalibrateGyro
 from sbgc_interfaces.msg import GimbalStatus
 
 from sensor_msgs.msg import BatteryState, JointState
@@ -263,6 +265,41 @@ class TestGimbalDriver(unittest.TestCase):
                 stale.last_frame_age.sec + stale.last_frame_age.nanosec * 1e-9, 0.4)
         finally:
             _board.set(answer_realtime=True)
+
+    def test_deactivating_resolves_an_inflight_goal(self):
+        # The timers are the only thing advancing the action state machines, so
+        # a transition that stops them has to terminate whatever is in flight.
+        # Without that the client waits for an answer that cannot arrive.
+        client = ActionClient(self.node, CalibrateGyro, '/sbgc_driver/calibrate_gyro')
+        self.assertTrue(
+            client.wait_for_server(timeout_sec=10.0), 'no calibrate_gyro server')
+
+        goal = CalibrateGyro.Goal()
+        goal.settle_timeout.sec = 30       # long enough that it cannot finish first
+        goal.skip_settle_check = False
+
+        send = client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self.node, send, timeout_sec=10.0)
+        handle = send.result()
+        self.assertIsNotNone(handle, 'goal was never acknowledged')
+        self.assertTrue(handle.accepted, 'goal was rejected')
+
+        result_future = handle.get_result_async()
+        self.node.spin_for(0.5)
+
+        try:
+            self.node.transition(Transition.TRANSITION_DEACTIVATE)
+            rclpy.spin_until_future_complete(self.node, result_future, timeout_sec=10.0)
+            self.assertIsNotNone(
+                result_future.result(),
+                'deactivating left the goal unresolved; the client would hang')
+            self.assertEqual(
+                result_future.result().result.result_code,
+                CalibrateGyro.Result.RESULT_LINK_UNAVAILABLE,
+                'an interrupted calibration must not report success')
+        finally:
+            self.node.transition(Transition.TRANSITION_ACTIVATE)
+            self.node.spin_for(1.0)
 
 
 @launch_testing.post_shutdown_test()

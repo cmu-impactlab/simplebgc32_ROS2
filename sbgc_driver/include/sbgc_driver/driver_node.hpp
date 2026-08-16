@@ -130,6 +130,11 @@ private:
   void trajTick();
   void trajFinish(int32_t code, const std::string & message);
 
+  // Terminate anything in flight. The timers are the only thing advancing
+  // these state machines, so a transition that stops them must resolve their
+  // goals or a client waits forever.
+  void abortActiveGoals(const std::string & why);
+
   // ---- publishing ----
   void publishTelemetry();
   void publishBoardInfo();
