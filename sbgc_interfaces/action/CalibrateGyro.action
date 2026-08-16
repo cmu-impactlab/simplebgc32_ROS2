@@ -15,7 +15,8 @@
 # Accepted goals end as:
 #
 #   SUCCEEDED  result_code == RESULT_OK
-#   ABORTED    result_code == RESULT_NOT_STILL or RESULT_LINK_UNAVAILABLE
+#   ABORTED    result_code == RESULT_NOT_STILL, RESULT_LINK_UNAVAILABLE
+#              or RESULT_INTERRUPTED
 #   CANCELED   result_code == RESULT_CANCELLED
 #
 # Cancellation. Accepted freely during PHASE_WAITING_TO_SETTLE, because nothing
@@ -42,6 +43,7 @@ uint8 RESULT_OK=0
 uint8 RESULT_NOT_STILL=1        # settle timeout expired while still moving
 uint8 RESULT_LINK_UNAVAILABLE=2
 uint8 RESULT_CANCELLED=3
+uint8 RESULT_INTERRUPTED=4      # ended by stop, disarm, or a lifecycle change
 
 uint8 result_code
 string message

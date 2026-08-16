@@ -114,6 +114,11 @@ struct CoreStatus
 // mount is a property of the build rather than of the protocol. Two gimbals
 // running identical firmware can present the same physical motion on different
 // axes and with different signs, so this cannot be a constant in the source.
+// Ceiling on |imu_axis_sign|. Orientation needs +-1 and a unit correction
+// needs a small factor; anything larger is a mistake, and a merely-finite
+// multiplier can still overflow once a 32767-count sample is scaled by it.
+inline constexpr double kMaxAxisSign = 1.0e6;
+
 struct AxisMapping
 {
   // For each output axis, which board axis supplies it. Board axes are
@@ -131,7 +136,9 @@ struct AxisMapping
   // that is wrong, which is worse than refusing it.
   bool valid() const;
 
-  // Apply to a raw board triple, scaling each component by `scale`.
+  // Apply to a raw board triple, scaling each component by `scale`. Falls back
+  // to the board's own order when the mapping is not valid, so this is safe to
+  // call unconditionally.
   AxisArray apply(const int16_t raw[kNumAxes], double scale) const;
 };
 

@@ -40,7 +40,10 @@ bool AxisMapping::valid() const
     if (seen[static_cast<size_t>(src)]) {return false;}   // duplicated axis
     seen[static_cast<size_t>(src)] = true;
     const double s = sign[static_cast<size_t>(i)];
-    if (!std::isfinite(s) || s == 0.0) {return false;}
+    // Bounded, not merely finite. A raw count reaches 32767, so a multiplier
+    // of 1e300 is finite on its own and overflows to infinity once scaled.
+    // kMaxAxisSign is far above any real orientation or unit correction.
+    if (!std::isfinite(s) || s == 0.0 || std::abs(s) > kMaxAxisSign) {return false;}
   }
   return true;
 }
@@ -48,6 +51,15 @@ bool AxisMapping::valid() const
 AxisArray AxisMapping::apply(const int16_t raw[kNumAxes], double scale) const
 {
   AxisArray out{};
+  // Checked here as well as by the caller. This is installed public API, and
+  // an out-of-range source index would read off the end of the array; a caller
+  // that skipped valid() gets the board's own order rather than a fault.
+  if (!valid()) {
+    for (int i = 0; i < kNumAxes; ++i) {
+      out[static_cast<size_t>(i)] = static_cast<double>(raw[i]) * scale;
+    }
+    return out;
+  }
   for (int i = 0; i < kNumAxes; ++i) {
     const size_t idx = static_cast<size_t>(i);
     out[idx] = static_cast<double>(raw[source[idx]]) * sign[idx] * scale;

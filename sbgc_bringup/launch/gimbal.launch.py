@@ -51,6 +51,8 @@ def generate_launch_description():
         ' yaw_min:=', LaunchConfiguration('yaw_min'),
         ' yaw_max:=', LaunchConfiguration('yaw_max'),
         ' imu_parent:=', LaunchConfiguration('imu_parent'),
+        ' imu_xyz:=', LaunchConfiguration('imu_xyz'),
+        ' imu_rpy:=', LaunchConfiguration('imu_rpy'),
     ]), value_type=str)
 
     driver = LifecycleNode(
@@ -136,6 +138,13 @@ def generate_launch_description():
             'imu_parent', default_value='pitch',
             description='Which stage the controller is bolted to: '
                         'base, yaw, roll or pitch.'),
+        DeclareLaunchArgument(
+            'imu_xyz', default_value='0 0 0',
+            description='Where the controller sits within imu_parent.'),
+        DeclareLaunchArgument(
+            'imu_rpy', default_value='0 0 0',
+            description='How the controller is rotated within imu_parent. This '
+                        'is where a board mounted at an angle is described.'),
         DeclareLaunchArgument(
             'params_file',
             default_value=PathJoinSubstitution([

@@ -244,6 +244,9 @@ CallbackReturn SbgcDriverNode::on_activate(const rclcpp_lifecycle::State & state
   LifecycleNode::on_activate(state);
 
   core_->setArmed(params_.start_armed);
+  // Kept in step with the core, or the status topic reports an arm state the
+  // driver does not actually hold.
+  armed_ = params_.start_armed && params_.allow_control;
 
   if (params_.auto_motors_on) {
     if (link_.send(SBGC_CMD_MOTORS_ON)) {motors_on_ = true;}
@@ -275,6 +278,7 @@ CallbackReturn SbgcDriverNode::on_deactivate(const rclcpp_lifecycle::State & sta
   // Stop commanding before anything else. This transition is the node's
   // "stop moving", and it must not depend on a service being reachable.
   core_->setArmed(false);
+  armed_ = false;
   if (link_.isOpen()) {link_.sendControl(core_->holdFrame());}
 
   // Before the timers go: they are the only thing advancing the action state
@@ -839,6 +843,14 @@ void SbgcDriverNode::srvHome(
     res->message = "motion not permitted; allow_control and arm are both required";
     return;
   }
+  // Both of these put a CMD_CONTROL on the wire, which cancels a running
+  // calibration on the board. Suppressing the timer's frame was not enough on
+  // its own; these two reach the same place by another route.
+  if (calib_phase_ != CalibPhase::Idle) {
+    res->success = false;
+    res->message = "a gyro calibration is running; wait for it or cancel it";
+    return;
+  }
   if (!link_.isOpen()) {
     res->success = false;
     res->message = "gimbal not connected";
@@ -855,6 +867,14 @@ void SbgcDriverNode::srvLevel(
   if (!core_->motionPermitted()) {
     res->success = false;
     res->message = "motion not permitted; allow_control and arm are both required";
+    return;
+  }
+  // Both of these put a CMD_CONTROL on the wire, which cancels a running
+  // calibration on the board. Suppressing the timer's frame was not enough on
+  // its own; these two reach the same place by another route.
+  if (calib_phase_ != CalibPhase::Idle) {
+    res->success = false;
+    res->message = "a gyro calibration is running; wait for it or cancel it";
     return;
   }
   if (!link_.isOpen()) {
@@ -924,9 +944,12 @@ void SbgcDriverNode::srvGetBoardInfo(
 void SbgcDriverNode::abortActiveGoals(const std::string & why)
 {
   if (calib_handle_) {
-    // Reported as a link failure rather than a cancellation: nobody cancelled
-    // it, and RESULT_OK would claim a calibration that did not finish.
-    calibFinish(Calibrate::Result::RESULT_LINK_UNAVAILABLE, why);
+    // INTERRUPTED, not LINK_UNAVAILABLE: stop, disarm and the lifecycle
+    // transitions all land here with a perfectly healthy link, and blaming the
+    // serial port for an operator's decision sends the next person debugging
+    // in the wrong direction. Either way it is not RESULT_OK, because nothing
+    // was calibrated.
+    calibFinish(Calibrate::Result::RESULT_INTERRUPTED, why);
   }
   calib_phase_ = CalibPhase::Idle;
   calib_handle_.reset();
@@ -990,6 +1013,13 @@ void SbgcDriverNode::calibAccepted(const std::shared_ptr<CalibrateGoal> handle)
   calib_settle_timeout_ = requested > 0.0 ? requested : kCalibSettleTimeout;
 
   if (handle->get_goal()->skip_settle_check) {
+    if (!recallMotionForCalibration()) {
+      calib_phase_ = CalibPhase::Calibrating;   // so calibFinish tidies up
+      calibFinish(
+        Calibrate::Result::RESULT_LINK_UNAVAILABLE,
+        "could not stop the gimbal before calibrating: " + link_.lastError());
+      return;
+    }
     const uint8_t menu = SBGC_MENU_CALIB_GYRO;
     if (!link_.send(SBGC_CMD_EXECUTE_MENU, &menu, 1)) {
       // The settling path already checked this. Ignoring it here meant a
@@ -1017,7 +1047,14 @@ void SbgcDriverNode::calibFinish(uint8_t code, const std::string & message)
   result->message = message;
   result->elapsed = toDuration(nowSeconds() - calib_started_);
 
-  if (code == Calibrate::Result::RESULT_CANCELLED) {
+  // is_canceling() decides the terminal METHOD; result_code only describes
+  // why. rclcpp_action permits canceled() solely from CANCELING and abort()
+  // solely from EXECUTING, and getting it wrong throws out of a timer or
+  // service callback and takes the process down. A goal that was cancelled and
+  // then interrupted by a stop reaches here with a non-cancel code, which is
+  // exactly the mismatch this ordering avoids.
+  if (calib_handle_->is_canceling()) {
+    result->result_code = Calibrate::Result::RESULT_CANCELLED;
     calib_handle_->canceled(result);
   } else if (code == Calibrate::Result::RESULT_OK) {
     calib_handle_->succeed(result);
@@ -1029,6 +1066,22 @@ void SbgcDriverNode::calibFinish(uint8_t code, const std::string & message)
   calib_handle_.reset();
   calib_phase_ = CalibPhase::Idle;
   calib_cancel_requested_ = false;
+}
+
+bool SbgcDriverNode::recallMotionForCalibration()
+{
+  if (!link_.isOpen()) {return false;}
+
+  // The board learns its zero-rate bias from a gimbal it assumes is still.
+  // Starting on one that is slewing is precisely the case that teaches a wrong
+  // bias and leaves the camera drifting for every session afterwards. There is
+  // no serial-loss failsafe on the board, so a rate transmitted a moment ago is
+  // still being obeyed; suppressing FUTURE control frames does not recall it.
+  //
+  // If the stop cannot be sent, the calibration does not start. Better to lose
+  // the request than to run it on a moving gimbal. This is the upstream rule.
+  core_->submitHold();
+  return link_.sendControl(core_->holdFrame());
 }
 
 void SbgcDriverNode::calibTick()
@@ -1084,6 +1137,12 @@ void SbgcDriverNode::calibTick()
     calib_have_last_angle_ = true;
 
     if (calib_still_since_ != 0.0 && (t - calib_still_since_) >= kCalibStillSeconds) {
+      if (!recallMotionForCalibration()) {
+        calibFinish(
+          Calibrate::Result::RESULT_LINK_UNAVAILABLE,
+          "could not stop the gimbal before calibrating: " + link_.lastError());
+        return;
+      }
       const uint8_t menu = SBGC_MENU_CALIB_GYRO;
       if (!link_.send(SBGC_CMD_EXECUTE_MENU, &menu, 1)) {
         calibFinish(Calibrate::Result::RESULT_LINK_UNAVAILABLE, link_.lastError());

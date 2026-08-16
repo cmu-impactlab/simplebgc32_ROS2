@@ -133,8 +133,9 @@ gyro count, both from the specification and both confirmed against a board 3.1 r
 firmware 2.63 b0, where a resting gimbal produced a raw vector 522 counts long
 (522/512 = 1.02 G).
 
-**Measuring yours** takes about a minute, needs no motion, and is entirely read-only —
-leave `allow_control:=false` and the motors off throughout.
+**Measuring yours** takes about a minute and is entirely read-only: leave
+`allow_control:=false` and the motors off throughout, and move the gimbal by hand. Nothing
+below commands the motors — with the power off the stages turn freely.
 
 ```bash
 ros2 topic echo /sbgc_driver/imu --field linear_acceleration
@@ -225,7 +226,7 @@ optional package for users who want MoveIt; `sbgc_driver` must never depend on
 
 **Why the decisions are in `GimbalCore`.** Safety rules that can only be exercised by
 standing up a node, a serial port and an executor do not get exercised. `GimbalCore` has
-no ROS includes and carries 30 unit tests asserting what reaches the wire.
+no ROS includes and carries 36 unit tests asserting what reaches the wire.
 
 **Threading.** `sbgc_t` has no internal locking. Every callback the driver creates that
 touches the port is in one mutually-exclusive callback group, and the shipped executable
@@ -233,7 +234,8 @@ spins single-threaded, so that is sufficient there. Do not add a port-touching c
 outside that group. The lifecycle transition callbacks are the exception and cannot join
 it — they are served by the LifecycleNode's own machinery, and `on_deactivate`/`on_cleanup`
 touch the link. Loading this component into a *multi-threaded* container therefore needs
-the host to serialise transitions against the timers.
+the host to serialise lifecycle transitions against everything else — the timers, the
+services and the action callbacks alike, since those read lifecycle state too.
 
 ## Testing
 
@@ -243,8 +245,8 @@ make test
 
 - Protocol: upstream's 37 byte-level assertions against BaseCam's published examples, run
   as a CTest so a submodule bump that changes the wire format fails this build.
-- Decisions: 30 gtest cases on `GimbalCore`.
-- Integration: 8 `launch_testing` cases driving the real node against the upstream board
+- Decisions: 36 gtest cases on `GimbalCore`.
+- Integration: 10 `launch_testing` cases driving the real node against the upstream board
   simulator on a pty.
 
 ## Licence

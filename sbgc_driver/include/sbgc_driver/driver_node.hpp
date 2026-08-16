@@ -138,6 +138,11 @@ private:
   void calibTick();
   void calibFinish(uint8_t code, const std::string & message);
 
+  // Put a stop on the wire and confirm it went. Calibration must not start on
+  // a gimbal that is still slewing, and a rate already in flight has to be
+  // recalled rather than merely forgotten.
+  bool recallMotionForCalibration();
+
   rclcpp_action::GoalResponse trajGoal(
     const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Trajectory::Goal> goal);
   rclcpp_action::CancelResponse trajCancel(const std::shared_ptr<TrajectoryGoal> handle);

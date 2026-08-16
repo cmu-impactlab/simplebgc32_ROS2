@@ -293,10 +293,15 @@ class TestGimbalDriver(unittest.TestCase):
             self.assertIsNotNone(
                 result_future.result(),
                 'deactivating left the goal unresolved; the client would hang')
+            # INTERRUPTED, not LINK_UNAVAILABLE: the serial link is perfectly
+            # healthy here and blaming it would send the next person debugging
+            # in the wrong direction. Either way it is not OK, because nothing
+            # was calibrated.
             self.assertEqual(
                 result_future.result().result.result_code,
-                CalibrateGyro.Result.RESULT_LINK_UNAVAILABLE,
-                'an interrupted calibration must not report success')
+                CalibrateGyro.Result.RESULT_INTERRUPTED,
+                'an interrupted calibration must not report success, nor blame '
+                'a link that never failed')
         finally:
             self.node.transition(Transition.TRANSITION_ACTIVATE)
             self.node.spin_for(1.0)
