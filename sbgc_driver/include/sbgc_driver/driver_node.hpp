@@ -13,10 +13,22 @@
 // a port and identified the board, and on_deactivate is a first-class "stop
 // moving" that does not depend on a bespoke service being reachable.
 //
-// THREADING: the link is not internally locked. Every callback that touches it
-// is placed in one mutually-exclusive callback group, so the node is safe
-// under a multi-threaded executor as well as a single-threaded one. Do not add
-// a port-touching callback outside that group.
+// THREADING: the link is not internally locked. Every callback this file
+// creates that touches it is placed in one mutually-exclusive callback group,
+// and the shipped executable spins single-threaded, so that is sufficient
+// there. Do not add a port-touching callback outside that group.
+//
+// The lifecycle transition callbacks are the exception and cannot be put in it:
+// they are served by the LifecycleNode's own machinery, and on_deactivate and
+// on_cleanup touch the link and the core. Loading this component into a
+// multi-threaded container therefore needs transitions serialised against the
+// timers by the host; it is not something this file can arrange on its own.
+//
+// FollowJointTrajectory here is a reduced implementation: it commands the
+// final point and lets the board run its own slew, so intermediate waypoints
+// are not replayed and time_from_start bounds the goal rather than pacing it.
+// path_tolerance is rejected rather than ignored, because this server never
+// observes the poses such a tolerance is defined against.
 
 #ifndef SBGC_DRIVER__DRIVER_NODE_HPP_
 #define SBGC_DRIVER__DRIVER_NODE_HPP_
@@ -28,6 +40,7 @@
 #include "diagnostic_updater/diagnostic_updater.hpp"
 #include "geometry_msgs/msg/quaternion_stamped.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "lifecycle_msgs/msg/state.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "sbgc_driver/gimbal_core.hpp"
 #include "sbgc_driver/sbgc_link.hpp"
@@ -73,8 +86,10 @@ public:
 private:
   // ---- wiring ----
   Config buildCoreConfig() const;
+  AxisMapping buildImuMapping() const;
   void applyParameters();
   double nowSeconds() const;
+  bool isActive() const;
 
   // ---- timers ----
   void controlTick();
@@ -181,10 +196,13 @@ private:
 
   std::unique_ptr<diagnostic_updater::Updater> diagnostics_;
 
+  AxisMapping imu_mapping_;
+
   std::vector<std::string> joint_names_;
   std::string resolved_port_;
 
   bool motors_on_ = false;
+  bool armed_ = false;
   bool relative_to_frame_ = false;
   bool board_info_published_ = false;
 
@@ -203,6 +221,9 @@ private:
 
   // Trajectory state machine.
   std::shared_ptr<TrajectoryGoal> traj_handle_;
+  // Separate from traj_handle_: the target must stop being re-submitted the
+  // moment the goal ends, and the handle outlives that by a cycle.
+  bool traj_active_ = false;
   AxisArray traj_target_{{0.0, 0.0, 0.0}};
   AxisArray traj_tolerance_{{0.0, 0.0, 0.0}};
   double traj_deadline_ = 0.0;

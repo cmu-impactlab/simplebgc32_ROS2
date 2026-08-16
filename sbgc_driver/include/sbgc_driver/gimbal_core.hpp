@@ -108,6 +108,33 @@ struct CoreStatus
   bool relative_to_frame = false;
 };
 
+// How the board's three sensor axes map onto the driver's own axes.
+//
+// The controller is a chip in a case, and which way that case is bolted into a
+// mount is a property of the build rather than of the protocol. Two gimbals
+// running identical firmware can present the same physical motion on different
+// axes and with different signs, so this cannot be a constant in the source.
+struct AxisMapping
+{
+  // For each output axis, which board axis supplies it. Board axes are
+  // 0 = ROLL, 1 = PITCH, 2 = YAW. Must be a permutation of {0, 1, 2}.
+  std::array<int, kNumAxes> source{{0, 1, 2}};
+
+  // Multiplier applied after the permutation, per output axis. Normally +1 or
+  // -1; any finite non-zero value is accepted so a mount with a scaled sensor
+  // can be described without patching the driver.
+  AxisArray sign{{1.0, 1.0, 1.0}};
+
+  // True when `source` is a permutation of {0,1,2} and every sign is finite
+  // and non-zero. A mapping that is not valid must not be applied: silently
+  // dropping or duplicating an axis would produce a plausible-looking vector
+  // that is wrong, which is worse than refusing it.
+  bool valid() const;
+
+  // Apply to a raw board triple, scaling each component by `scale`.
+  AxisArray apply(const int16_t raw[kNumAxes], double scale) const;
+};
+
 class GimbalCore
 {
 public:

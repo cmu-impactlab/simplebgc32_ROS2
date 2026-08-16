@@ -67,6 +67,12 @@ SbgcDriverNode::SbgcDriverNode(const rclcpp::NodeOptions & options)
   params_ = param_listener_->get_params();
 }
 
+bool SbgcDriverNode::isActive() const
+{
+  return get_current_state().id() ==
+         lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
+}
+
 double SbgcDriverNode::nowSeconds() const
 {
   return static_cast<double>(now().nanoseconds()) * 1e-9;
@@ -90,11 +96,32 @@ Config SbgcDriverNode::buildCoreConfig() const
   return c;
 }
 
+AxisMapping SbgcDriverNode::buildImuMapping() const
+{
+  AxisMapping m;
+  for (int i = 0; i < kNumAxes; ++i) {
+    const size_t idx = static_cast<size_t>(i);
+    m.source[idx] = static_cast<int>(params_.imu_axis_map[idx]);
+    m.sign[idx] = params_.imu_axis_sign[idx];
+  }
+  if (!m.valid()) {
+    // Dropping or duplicating an axis would produce a plausible-looking vector
+    // that is wrong, which is worse than refusing the configuration.
+    RCLCPP_ERROR(
+      get_logger(),
+      "imu_axis_map must be a permutation of 0,1,2 and imu_axis_sign must be "
+      "finite and non-zero; falling back to the identity mapping");
+    return AxisMapping{};
+  }
+  return m;
+}
+
 void SbgcDriverNode::applyParameters()
 {
   if (param_listener_->is_old(params_)) {
     params_ = param_listener_->get_params();
     if (core_) {core_->setConfig(buildCoreConfig());}
+    imu_mapping_ = buildImuMapping();
   }
 }
 
@@ -109,6 +136,7 @@ CallbackReturn SbgcDriverNode::on_configure(const rclcpp_lifecycle::State &)
     params_.joint_prefix + "pitch_joint",
     params_.joint_prefix + "yaw_joint"};
 
+  imu_mapping_ = buildImuMapping();
   core_ = std::make_unique<GimbalCore>(
     buildCoreConfig(), [this]() {return nowSeconds();});
   core_->setControlAllowed(params_.allow_control);
@@ -266,6 +294,18 @@ CallbackReturn SbgcDriverNode::on_deactivate(const rclcpp_lifecycle::State & sta
 
 CallbackReturn SbgcDriverNode::on_cleanup(const rclcpp_lifecycle::State &)
 {
+  // Timers first, and unconditionally. on_shutdown and on_error route straight
+  // here from any state, so reaching this from active with the timers still
+  // armed left controlTick and statusTick running against a core_ that the
+  // next few lines destroy.
+  control_timer_.reset();
+  telemetry_timer_.reset();
+  board_info_timer_.reset();
+  status_timer_.reset();
+
+  abortActiveGoals("the driver was cleaned up");
+  armed_ = false;
+
   link_.close();
   core_.reset();
   diagnostics_.reset();
@@ -285,7 +325,6 @@ CallbackReturn SbgcDriverNode::on_cleanup(const rclcpp_lifecycle::State &)
   level_srv_.reset();
   control_mode_srv_.reset();
   board_info_srv_.reset();
-  abortActiveGoals("the driver was cleaned up");
   calib_server_.reset();
   traj_server_.reset();
 
@@ -364,13 +403,31 @@ void SbgcDriverNode::controlTick()
         next_reconnect_ = nowSeconds() + params_.reconnect_delay;
       }
     }
+    // Still advance the action machines. Returning here left their own
+    // link-unavailable checks unreachable, so a goal in flight when the link
+    // dropped waited for a reconnection that might never come.
+    calibTick();
+    trajTick();
     return;
   }
 
-  const WireControl w = core_->tick();
-  if (!link_.sendControl(w)) {
-    noteLinkLost(link_.lastError());
-    return;
+  // Nothing is transmitted while the board is calibrating.
+  //
+  // The upstream daemon documents that any CMD_CONTROL cancels a running
+  // calibration, and suppresses control for the WHOLE calibration rather than
+  // the single pass that started it. Sending a frame every 33 ms here would
+  // have cancelled the calibration on the board within one tick, while the
+  // action went on to report success after its 4.5 s window -- claiming a
+  // calibration that never happened.
+  //
+  // There is nothing to stop: motion was already refused for the duration by
+  // calibGoal, so the axes are not being driven.
+  if (calib_phase_ != CalibPhase::Calibrating) {
+    const WireControl w = core_->tick();
+    if (!link_.sendControl(w)) {
+      noteLinkLost(link_.lastError());
+      return;
+    }
   }
 
   if (link_.poll(0) < 0) {
@@ -455,25 +512,28 @@ void SbgcDriverNode::publishTelemetry()
     imu.orientation = q.quaternion;
 
     // ACC_DATA is 1/512 G and GYRO_DATA is 0.06103701895 deg/s, both per the
-    // protocol specification.
+    // protocol specification, and both confirmed against a board 3.1 running
+    // firmware 2.63b0: at rest the raw acceleration vector is 522 counts long,
+    // and 522/512 = 1.02 G.
     //
-    // The specification also describes the accelerometer as "expressed in END
-    // coordinate system, sign is inverted", which this code previously read as
-    // an instruction to negate. Measured against a board 3.1 / firmware 2.63b0
-    // sitting at rest, that was wrong: the board reports +1.02 G on its
-    // vertical axis, and sensor_msgs/Imu wants proper acceleration, which is
-    // +9.81 upward at rest. Negating published -9.86 where +9.81 belongs.
-    // Passed through unnegated, a stationary gimbal now reads +9.8 on z.
-    //
-    // The magnitude is confirmed by the same measurement: the raw vector is
-    // 522 counts long, and 522/512 = 1.02 G.
-    imu.linear_acceleration.x = rt.acc_raw[SBGC_ROLL] * SBGC_ACC_UNIT_G * kG;
-    imu.linear_acceleration.y = rt.acc_raw[SBGC_PITCH] * SBGC_ACC_UNIT_G * kG;
-    imu.linear_acceleration.z = rt.acc_raw[SBGC_YAW] * SBGC_ACC_UNIT_G * kG;
+    // Which board axis becomes which ROS axis, and with what sign, is NOT
+    // fixed here. The controller is a chip in a case and the way that case is
+    // bolted into a mount differs between builds, so it comes from
+    // imu_axis_map and imu_axis_sign. The default passes the board's own order
+    // through unchanged; the README explains how to measure the right values,
+    // which needs a minute and no motion.
+    const AxisArray acc =
+      imu_mapping_.apply(rt.acc_raw, SBGC_ACC_UNIT_G * kG);
+    const AxisArray gyro =
+      imu_mapping_.apply(rt.gyro_raw, degToRad(SBGC_GYRO_UNIT_DEGS));
 
-    imu.angular_velocity.x = degToRad(rt.gyro_raw[SBGC_ROLL] * SBGC_GYRO_UNIT_DEGS);
-    imu.angular_velocity.y = degToRad(rt.gyro_raw[SBGC_PITCH] * SBGC_GYRO_UNIT_DEGS);
-    imu.angular_velocity.z = degToRad(rt.gyro_raw[SBGC_YAW] * SBGC_GYRO_UNIT_DEGS);
+    imu.linear_acceleration.x = acc[0];
+    imu.linear_acceleration.y = acc[1];
+    imu.linear_acceleration.z = acc[2];
+
+    imu.angular_velocity.x = gyro[0];
+    imu.angular_velocity.y = gyro[1];
+    imu.angular_velocity.z = gyro[2];
 
     // All-zero means "covariance unknown", which is the honest answer: the
     // board publishes no uncertainty and this driver has measured none.
@@ -541,7 +601,10 @@ void SbgcDriverNode::statusTick()
 
   s.motors_on = motors_on_;
   s.control_allowed = params_.allow_control;
-  s.armed = core_->motionPermitted() || (params_.allow_control && link_.isOpen());
+  // The arm bit itself, not a proxy for it. This previously OR'd in
+  // "control_allowed && link_open", so the topic went on reporting armed after
+  // a successful disarm -- contradicting the message's own definition.
+  s.armed = armed_;
   s.command_timeout = cs.command_timeout;
 
   s.limits_source = sbgc_interfaces::msg::GimbalStatus::LIMITS_PARAM;
@@ -716,7 +779,21 @@ void SbgcDriverNode::srvArm(
     res->message = "allow_control is false; arming would have no effect";
     return;
   }
+  if (req->data && !isActive()) {
+    // Arming an inactive node has no timer behind it, so it would advertise a
+    // readiness the driver does not have.
+    res->success = false;
+    res->message = "the driver is not active; activate it before arming";
+    return;
+  }
+  if (!req->data) {
+    // The core drops its own pending command on disarm, but a running
+    // trajectory would re-submit its target on the next tick and start moving
+    // again the moment the operator re-armed.
+    abortActiveGoals("disarmed");
+  }
   core_->setArmed(req->data);
+  armed_ = req->data && params_.allow_control;
   res->success = true;
   res->message = req->data ? "armed" : "disarmed";
   RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
@@ -738,6 +815,11 @@ void SbgcDriverNode::srvStop(
 {
   // Deliberately not gated on arm. The gate exists to prevent unwanted motion,
   // and refusing to stop would invert its purpose.
+  //
+  // Anything in flight is ended first. A running trajectory re-submits its
+  // target every cycle, so clearing the core alone would have been undone
+  // 33 ms later and the stop would not have stuck.
+  abortActiveGoals("stopped by request");
   core_->submitHold();
   if (!link_.isOpen()) {
     res->success = false;
@@ -858,10 +940,22 @@ void SbgcDriverNode::abortActiveGoals(const std::string & why)
 rclcpp_action::GoalResponse SbgcDriverNode::calibGoal(
   const rclcpp_action::GoalUUID &, std::shared_ptr<const Calibrate::Goal>)
 {
+  // Servers exist from configure, but the timers that advance them only exist
+  // once active. A goal accepted while inactive would never be ticked.
+  if (!isActive()) {
+    RCLCPP_WARN(get_logger(), "calibration refused: the driver is not active");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
   // Refused here rather than accepted and immediately failed, so a rejection
   // is a rejection in the protocol's own terms and never produces a Result.
   if (calib_phase_ != CalibPhase::Idle) {
     RCLCPP_WARN(get_logger(), "calibration already running");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  if (traj_active_) {
+    // A trajectory keeps commanding motion, and calibrating a moving gimbal
+    // writes a wrong bias that makes the camera drift afterwards.
+    RCLCPP_WARN(get_logger(), "calibration refused: a trajectory is running");
     return rclcpp_action::GoalResponse::REJECT;
   }
   if (!core_->motionPermitted()) {
@@ -897,7 +991,13 @@ void SbgcDriverNode::calibAccepted(const std::shared_ptr<CalibrateGoal> handle)
 
   if (handle->get_goal()->skip_settle_check) {
     const uint8_t menu = SBGC_MENU_CALIB_GYRO;
-    link_.send(SBGC_CMD_EXECUTE_MENU, &menu, 1);
+    if (!link_.send(SBGC_CMD_EXECUTE_MENU, &menu, 1)) {
+      // The settling path already checked this. Ignoring it here meant a
+      // calibration that was never transmitted still reported success.
+      calib_phase_ = CalibPhase::Calibrating;   // so calibFinish tidies up
+      calibFinish(Calibrate::Result::RESULT_LINK_UNAVAILABLE, link_.lastError());
+      return;
+    }
     calib_phase_ = CalibPhase::Calibrating;
     calib_phase_started_ = nowSeconds();
     RCLCPP_WARN(get_logger(), "calibrating without waiting for the gimbal to settle");
@@ -955,7 +1055,17 @@ void SbgcDriverNode::calibTick()
     feedback->phase = Calibrate::Feedback::PHASE_WAITING_TO_SETTLE;
     calib_handle_->publish_feedback(feedback);
 
-    if (!core_->status().angle_valid) {return;}
+    // Stillness has to be measured from FRESH samples. Comparing the cached
+    // angle at control-timer rate meant a board that stopped answering after
+    // one good sample accumulated a second of identical readings, looked
+    // perfectly still, and got calibrated on evidence that had stopped
+    // arriving.
+    const double age = link_.haveRealtime() ? (t - telemetry_stamp_) : 1e6;
+    if (!core_->status().angle_valid || age > params_.angle_fresh_timeout) {
+      calib_still_since_ = 0.0;
+      calib_have_last_angle_ = false;
+      return;
+    }
 
     const AxisArray angle = core_->status().continuous_rad;
     if (calib_have_last_angle_) {
@@ -1014,8 +1124,19 @@ void SbgcDriverNode::calibTick()
 rclcpp_action::GoalResponse SbgcDriverNode::trajGoal(
   const rclcpp_action::GoalUUID &, std::shared_ptr<const Trajectory::Goal> goal)
 {
+  if (!isActive()) {
+    RCLCPP_WARN(get_logger(), "trajectory refused: the driver is not active");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
   if (goal->trajectory.points.empty()) {
     RCLCPP_WARN(get_logger(), "trajectory goal has no points");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  if (traj_active_) {
+    // Refused rather than silently replacing the running goal: two goals
+    // commanding one gimbal has no sensible answer, and the first client is
+    // still waiting on a result.
+    RCLCPP_WARN(get_logger(), "trajectory refused: one is already running");
     return rclcpp_action::GoalResponse::REJECT;
   }
   if (!core_->motionPermitted()) {
@@ -1024,6 +1145,18 @@ rclcpp_action::GoalResponse SbgcDriverNode::trajGoal(
   }
   if (calib_phase_ != CalibPhase::Idle) {
     RCLCPP_WARN(get_logger(), "trajectory refused: a calibration is running");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  if (!goal->path_tolerance.empty()) {
+    // Refused rather than ignored. This server drives to the final point and
+    // lets the board run its own slew in between, so it never sees the
+    // intermediate poses a path tolerance is defined against and could not
+    // detect a violation. Accepting the goal would silently drop a constraint
+    // the caller asked for.
+    RCLCPP_WARN(
+      get_logger(),
+      "trajectory refused: path_tolerance cannot be honoured by this driver, "
+      "which commands the final point and lets the board slew to it");
     return rclcpp_action::GoalResponse::REJECT;
   }
   for (const auto & name : goal->trajectory.joint_names) {
@@ -1044,6 +1177,7 @@ rclcpp_action::CancelResponse SbgcDriverNode::trajCancel(
 void SbgcDriverNode::trajAccepted(const std::shared_ptr<TrajectoryGoal> handle)
 {
   traj_handle_ = handle;
+  traj_active_ = true;
   const auto & goal = *handle->get_goal();
 
   // Only the final point is driven to. The board runs its own trajectory
@@ -1083,21 +1217,29 @@ void SbgcDriverNode::trajFinish(int32_t code, const std::string & message)
   result->error_code = code;
   result->error_string = message;
 
-  if (code == Trajectory::Result::SUCCESSFUL) {
-    traj_handle_->succeed(result);
-  } else if (traj_handle_->is_canceling()) {
+  // is_canceling() is checked FIRST. rclcpp_action only permits succeed() from
+  // the EXECUTING state and throws otherwise, and a throw from a timer callback
+  // takes the process down -- so a cancelled goal that reported SUCCESSFUL
+  // would have crashed the driver rather than ending the goal.
+  if (traj_handle_->is_canceling()) {
     traj_handle_->canceled(result);
+  } else if (code == Trajectory::Result::SUCCESSFUL) {
+    traj_handle_->succeed(result);
   } else {
     traj_handle_->abort(result);
   }
+  traj_active_ = false;
   traj_handle_.reset();
 }
 
 void SbgcDriverNode::trajTick()
 {
-  if (!traj_handle_) {return;}
+  if (!traj_handle_ || !traj_active_) {return;}
 
   if (traj_handle_->is_canceling()) {
+    // Must clear the target before finishing: trajTick re-submits it every
+    // cycle, so leaving it set would have the cancelled goal keep commanding.
+    traj_active_ = false;
     core_->submitHold();
     trajFinish(Trajectory::Result::SUCCESSFUL, "cancelled");
     return;

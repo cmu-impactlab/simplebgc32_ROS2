@@ -112,16 +112,62 @@ and its positive-downward pitch never reach the ROS API.
 - **`camera_optical_frame` is not `camera_link`.** The optical frame is z-forward,
   x-right, y-down. Confusing the two is the usual way a gimbal integration ends up
   pointing sideways.
+- **`FollowJointTrajectory` is a reduced implementation.** It commands the final point and
+  lets the board run its own slew, so intermediate waypoints are not replayed and
+  `time_from_start` bounds the goal rather than pacing it. Goals carrying `path_tolerance`
+  are *rejected* rather than silently accepted, since this server never observes the poses
+  such a tolerance is defined against.
 
-### A caveat on `sensor_msgs/Imu`
+### Configuring the IMU for your mount
 
-`orientation` comes from the board's own angles and is trustworthy. The raw
-`angular_velocity` and `linear_acceleration` vectors carry the scaling and the sign
-inversion the protocol specification documents, but **the mapping of the board's axis
-order onto REP-103 body axes has not been confirmed against physical hardware**, so they
-are published in the board's own IMU frame. Covariances are all-zero, which the message
-defines as "unknown" — the board publishes no uncertainty and this driver has measured
-none. Set `publish_imu: false` if you would rather not have the topic at all.
+`orientation` comes from the board's own angles and needs no configuration.
+
+The raw `angular_velocity` and `linear_acceleration` vectors do. The controller is a chip
+in a case, and which way that case is bolted into a mount is a property of *your build*,
+not of the protocol — two gimbals on identical firmware can present the same physical
+motion on different axes and with different signs. So the mapping is
+`imu_axis_map` and `imu_axis_sign` rather than a constant in the source.
+
+The scaling is not in question: 1/512 G per accelerometer count and 0.06103701895 °/s per
+gyro count, both from the specification and both confirmed against a board 3.1 running
+firmware 2.63 b0, where a resting gimbal produced a raw vector 522 counts long
+(522/512 = 1.02 G).
+
+**Measuring yours** takes about a minute, needs no motion, and is entirely read-only —
+leave `allow_control:=false` and the motors off throughout.
+
+```bash
+ros2 topic echo /sbgc_driver/imu --field linear_acceleration
+```
+
+1. **Sit the gimbal level and still.** `z` should read about **+9.81**.
+   `sensor_msgs/Imu` carries *proper acceleration*, so up is positive at rest. If you get
+   −9.81, flip the third entry of `imu_axis_sign`. If gravity shows up on `x` or `y`
+   instead, that axis is your vertical one — put its board index third in `imu_axis_map`.
+2. **Tilt the camera nose-down.** `x` should go **negative**. If `y` moves instead, swap
+   the first two entries of `imu_axis_map`; if `x` moves the wrong way, flip its sign.
+3. **Roll the camera right-side-down.** `y` should go **negative**. Same remedies.
+
+A worked example, for a board whose sensor is rotated so that yaw feeds x and roll feeds z,
+with z inverted:
+
+```yaml
+imu_axis_map:  [2, 1, 0]     # x<-YAW, y<-PITCH, z<-ROLL
+imu_axis_sign: [1.0, 1.0, -1.0]
+```
+
+`imu_axis_map` must be a permutation of `0,1,2`; anything else is refused with an error and
+the identity is used, because a mapping that drops or duplicates an axis still produces a
+plausible-looking vector.
+
+The IMU's *frame* is configurable too. `sbgc_description` places `gimbal_imu_link` with the
+`imu_parent` argument (`base`, `yaw`, `roll` or `pitch` — most mounts carry the board on
+the pitch stage) plus `imu_xyz`/`imu_rpy`, which is where a board mounted at an angle is
+described.
+
+Covariances are all-zero, which the message defines as "unknown" — the board publishes no
+uncertainty and this driver has measured none. Set `publish_imu: false` to drop the topic
+entirely.
 
 ## Safety
 
@@ -181,9 +227,13 @@ optional package for users who want MoveIt; `sbgc_driver` must never depend on
 standing up a node, a serial port and an executor do not get exercised. `GimbalCore` has
 no ROS includes and carries 30 unit tests asserting what reaches the wire.
 
-**Threading.** `sbgc_t` has no internal locking. Every callback that touches the port is in
-one mutually-exclusive callback group, which is what makes the node safe under a
-multi-threaded executor. Do not add a port-touching callback outside it.
+**Threading.** `sbgc_t` has no internal locking. Every callback the driver creates that
+touches the port is in one mutually-exclusive callback group, and the shipped executable
+spins single-threaded, so that is sufficient there. Do not add a port-touching callback
+outside that group. The lifecycle transition callbacks are the exception and cannot join
+it — they are served by the LifecycleNode's own machinery, and `on_deactivate`/`on_cleanup`
+touch the link. Loading this component into a *multi-threaded* container therefore needs
+the host to serialise transitions against the timers.
 
 ## Testing
 

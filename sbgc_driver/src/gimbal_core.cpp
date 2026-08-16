@@ -31,6 +31,30 @@ double boardPitchFromRos(double v) {return -v;}
 
 }  // namespace
 
+bool AxisMapping::valid() const
+{
+  std::array<bool, kNumAxes> seen{};
+  for (int i = 0; i < kNumAxes; ++i) {
+    const int src = source[static_cast<size_t>(i)];
+    if (src < 0 || src >= kNumAxes) {return false;}
+    if (seen[static_cast<size_t>(src)]) {return false;}   // duplicated axis
+    seen[static_cast<size_t>(src)] = true;
+    const double s = sign[static_cast<size_t>(i)];
+    if (!std::isfinite(s) || s == 0.0) {return false;}
+  }
+  return true;
+}
+
+AxisArray AxisMapping::apply(const int16_t raw[kNumAxes], double scale) const
+{
+  AxisArray out{};
+  for (int i = 0; i < kNumAxes; ++i) {
+    const size_t idx = static_cast<size_t>(i);
+    out[idx] = static_cast<double>(raw[source[idx]]) * sign[idx] * scale;
+  }
+  return out;
+}
+
 GimbalCore::GimbalCore(Config cfg, std::function<double()> now)
 : cfg_(cfg), now_(std::move(now))
 {

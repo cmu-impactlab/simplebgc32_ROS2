@@ -3,16 +3,46 @@
   A gimbal on its own, for viewing the model and for checking the TF tree
   without a robot around it. A real integration includes sbgc_gimbal.urdf.xacro
   from its own description and gives it a proper parent instead.
+
+  Every argument the macro takes is forwarded, so the bringup launch file can
+  pass the same joint limits it gives the driver. An argument declared here but
+  not forwarded would be accepted on the command line and silently ignored,
+  which is worse than not offering it.
 -->
 <robot name="sbgc_gimbal" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <xacro:arg name="prefix" default="gimbal_"/>
 
+  <!-- Radians. Keep these in step with the driver's limit_min_deg /
+       limit_max_deg; robot_state_publisher will otherwise render joint
+       positions the driver refuses to command. -->
+  <xacro:arg name="roll_min"  default="-0.785"/>
+  <xacro:arg name="roll_max"  default="0.785"/>
+  <xacro:arg name="pitch_min" default="-1.571"/>
+  <xacro:arg name="pitch_max" default="0.698"/>
+  <xacro:arg name="yaw_min"   default="-2.967"/>
+  <xacro:arg name="yaw_max"   default="2.967"/>
+  <xacro:arg name="max_rate"  default="0.79"/>
+
+  <!-- Which stage the controller is bolted to, and where on it. -->
+  <xacro:arg name="imu_parent" default="pitch"/>
+  <xacro:arg name="imu_xyz"    default="0 0 0"/>
+  <xacro:arg name="imu_rpy"    default="0 0 0"/>
+
   <xacro:include filename="$(find sbgc_description)/urdf/sbgc_gimbal.urdf.xacro"/>
 
   <link name="base_link"/>
 
-  <xacro:sbgc_gimbal prefix="$(arg prefix)" parent="base_link">
+  <xacro:sbgc_gimbal
+      prefix="$(arg prefix)"
+      parent="base_link"
+      roll_min="$(arg roll_min)"   roll_max="$(arg roll_max)"
+      pitch_min="$(arg pitch_min)" pitch_max="$(arg pitch_max)"
+      yaw_min="$(arg yaw_min)"     yaw_max="$(arg yaw_max)"
+      max_rate="$(arg max_rate)"
+      imu_parent="$(arg imu_parent)"
+      imu_xyz="$(arg imu_xyz)"
+      imu_rpy="$(arg imu_rpy)">
     <origin xyz="0 0 0" rpy="0 0 0"/>
   </xacro:sbgc_gimbal>
 

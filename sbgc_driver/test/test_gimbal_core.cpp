@@ -524,3 +524,73 @@ TEST(ConfigValidation, AReversedLimitRangeIsOrderedRatherThanStrandingTheAxis)
   f.rate(0.0, 0.0, deg(20));
   EXPECT_TRUE(f.core.tick().moving) << "an axis in the middle of its range must move";
 }
+
+// ---- the IMU axis mapping ------------------------------------------------
+//
+// The controller is a chip in a case, and which way that case is bolted into a
+// mount differs between builds. These cover the mapping being applied, and
+// being refused when it would silently corrupt a vector.
+
+TEST(AxisMapping, TheIdentityPassesTheBoardsOwnOrderThrough)
+{
+  const int16_t raw[3] = {10, 20, 30};
+  sbgc_driver::AxisMapping m;              // defaults to identity, +1 signs
+  EXPECT_TRUE(m.valid());
+
+  const auto out = m.apply(raw, 1.0);
+  EXPECT_DOUBLE_EQ(out[0], 10.0);
+  EXPECT_DOUBLE_EQ(out[1], 20.0);
+  EXPECT_DOUBLE_EQ(out[2], 30.0);
+}
+
+TEST(AxisMapping, PermutesAndSignsIndependently)
+{
+  const int16_t raw[3] = {10, 20, 30};
+  sbgc_driver::AxisMapping m;
+  m.source = {{2, 0, 1}};                  // x<-yaw, y<-roll, z<-pitch
+  m.sign = {{1.0, -1.0, 1.0}};
+  ASSERT_TRUE(m.valid());
+
+  const auto out = m.apply(raw, 1.0);
+  EXPECT_DOUBLE_EQ(out[0], 30.0);
+  EXPECT_DOUBLE_EQ(out[1], -10.0);
+  EXPECT_DOUBLE_EQ(out[2], 20.0);
+}
+
+TEST(AxisMapping, ScaleIsAppliedToEveryComponent)
+{
+  // This is how the raw counts become m/s^2 and rad/s.
+  const int16_t raw[3] = {0, 0, 517};      // ~1 g on the vertical axis
+  sbgc_driver::AxisMapping m;
+  const auto out = m.apply(raw, (1.0 / 512.0) * 9.80665);
+  EXPECT_NEAR(out[2], 9.90, 0.01);
+}
+
+TEST(AxisMapping, ADuplicatedSourceAxisIsRefused)
+{
+  // Two outputs fed from one board axis means a third is silently dropped, and
+  // the result still looks like a plausible vector. Refusing beats guessing.
+  sbgc_driver::AxisMapping m;
+  m.source = {{0, 0, 2}};
+  EXPECT_FALSE(m.valid());
+}
+
+TEST(AxisMapping, AnOutOfRangeSourceAxisIsRefused)
+{
+  sbgc_driver::AxisMapping m;
+  m.source = {{0, 1, 3}};
+  EXPECT_FALSE(m.valid());
+  m.source = {{-1, 1, 2}};
+  EXPECT_FALSE(m.valid());
+}
+
+TEST(AxisMapping, ANonFiniteOrZeroSignIsRefused)
+{
+  sbgc_driver::AxisMapping m;
+  m.sign = {{1.0, std::numeric_limits<double>::quiet_NaN(), 1.0}};
+  EXPECT_FALSE(m.valid());
+
+  // Zero would erase an axis while still reporting a three-vector.
+  m.sign = {{1.0, 0.0, 1.0}};
+  EXPECT_FALSE(m.valid());
+}

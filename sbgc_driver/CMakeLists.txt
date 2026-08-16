@@ -19,6 +19,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(lifecycle_msgs REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(sbgc_interfaces REQUIRED)
 find_package(sbgc_protocol REQUIRED)
@@ -62,6 +63,7 @@ ament_target_dependencies(sbgc_driver_component PUBLIC
   rclcpp
   rclcpp_action
   rclcpp_components
+  lifecycle_msgs
   rclcpp_lifecycle
   sbgc_interfaces
   sensor_msgs

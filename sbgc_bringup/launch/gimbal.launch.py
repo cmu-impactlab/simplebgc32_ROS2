@@ -39,6 +39,18 @@ def generate_launch_description():
             FindPackageShare('sbgc_description'), 'urdf', 'standalone.urdf.xacro',
         ]),
         ' prefix:=', prefix,
+        # The joint limits and the IMU placement come from launch arguments so
+        # the URDF and the driver can be given the same numbers. They are NOT
+        # read out of params_file: xacro cannot see a ROS parameter file, so
+        # anyone overriding the driver's limits has to pass them here too, and
+        # these arguments are how.
+        ' roll_min:=', LaunchConfiguration('roll_min'),
+        ' roll_max:=', LaunchConfiguration('roll_max'),
+        ' pitch_min:=', LaunchConfiguration('pitch_min'),
+        ' pitch_max:=', LaunchConfiguration('pitch_max'),
+        ' yaw_min:=', LaunchConfiguration('yaw_min'),
+        ' yaw_max:=', LaunchConfiguration('yaw_max'),
+        ' imu_parent:=', LaunchConfiguration('imu_parent'),
     ]), value_type=str)
 
     driver = LifecycleNode(
@@ -69,11 +81,15 @@ def generate_launch_description():
         parameters=[{'robot_description': robot_description}],
     )
 
+    # Conditional, like the activation below it. Configuring opens the serial
+    # port, so doing it unconditionally made auto_start:=false a promise the
+    # launch file did not keep.
     configure = EmitEvent(
         event=ChangeState(
             lifecycle_node_matcher=matches_action(driver),
             transition_id=Transition.TRANSITION_CONFIGURE,
         ),
+        condition=IfCondition(auto_start),
     )
 
     activate_on_configured = RegisterEventHandler(
@@ -104,7 +120,22 @@ def generate_launch_description():
         DeclareLaunchArgument('simulate', default_value='false'),
         DeclareLaunchArgument(
             'auto_start', default_value='false',
-            description='Configure and activate without being asked.'),
+            description='Configure and activate without being asked. Left off '
+                        'because configuring opens the serial port and '
+                        'activating starts commanding.'),
+        # Radians, matching sbgc_driver.yaml's limit_min_deg / limit_max_deg.
+        # Change these together with the driver's, or robot_state_publisher
+        # will happily render joints the driver refuses to command.
+        DeclareLaunchArgument('roll_min', default_value='-0.785'),
+        DeclareLaunchArgument('roll_max', default_value='0.785'),
+        DeclareLaunchArgument('pitch_min', default_value='-1.571'),
+        DeclareLaunchArgument('pitch_max', default_value='0.698'),
+        DeclareLaunchArgument('yaw_min', default_value='-2.967'),
+        DeclareLaunchArgument('yaw_max', default_value='2.967'),
+        DeclareLaunchArgument(
+            'imu_parent', default_value='pitch',
+            description='Which stage the controller is bolted to: '
+                        'base, yaw, roll or pitch.'),
         DeclareLaunchArgument(
             'params_file',
             default_value=PathJoinSubstitution([

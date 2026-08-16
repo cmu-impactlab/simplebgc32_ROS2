@@ -20,7 +20,10 @@
       yaw_min:=-2.967  yaw_max:=2.967
       roll_min:=-0.785 roll_max:=0.785
       pitch_min:=-1.571 pitch_max:=0.698
-      max_rate:=0.79">
+      max_rate:=0.79
+      imu_parent:=pitch
+      imu_xyz:='0 0 0'
+      imu_rpy:='0 0 0'">
 
     <!-- Where the gimbal bolts to whatever carries it. -->
     <link name="${prefix}base_link">
@@ -98,6 +101,24 @@
       <origin xyz="0 0.04 0"/>
       <axis xyz="0 -1 0"/>
       <limit lower="${pitch_min}" upper="${pitch_max}" effort="1.0" velocity="${max_rate}"/>
+    </joint>
+
+    <!--
+      The controller's own IMU.
+
+      The driver publishes sensor_msgs/Imu in this frame, so it has to exist or
+      nothing can transform that data. Which link it rides on is a build
+      decision: on most mounts the board sits on the pitch stage with the
+      camera, but on some it is bolted to the base or the yaw stage instead.
+      imu_parent selects base, yaw, roll or pitch, and imu_xyz/imu_rpy place it
+      within that link, which is also where a board mounted at an angle is
+      described rather than by editing this file.
+    -->
+    <link name="${prefix}imu_link"/>
+    <joint name="${prefix}imu_joint" type="fixed">
+      <parent link="${prefix}${imu_parent}_link"/>
+      <child link="${prefix}imu_link"/>
+      <origin xyz="${imu_xyz}" rpy="${imu_rpy}"/>
     </joint>
 
     <link name="${prefix}camera_link"/>

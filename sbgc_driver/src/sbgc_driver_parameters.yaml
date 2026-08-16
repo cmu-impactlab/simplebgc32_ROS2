@@ -120,6 +120,39 @@ sbgc_driver:
       mapping of the raw vectors onto REP-103 axes has NOT been verified
       against hardware. See the README before consuming the vectors.
 
+  imu_axis_map:
+    type: int_array
+    default_value: [0, 1, 2]
+    description: >
+      Which board sensor axis feeds each ROS axis, as
+      [source_for_x, source_for_y, source_for_z]. Board axes are 0 = ROLL,
+      1 = PITCH, 2 = YAW. Must be a permutation of 0,1,2.
+
+      The controller is a chip in a case, and which way that case is bolted
+      into a mount is a property of the build rather than of the protocol. Two
+      gimbals on identical firmware can present the same physical motion on
+      different axes, so there is no value here that is correct everywhere.
+      The default passes the board's own order through unchanged. See the
+      README for how to measure yours; it takes about a minute and needs no
+      motion.
+    validation:
+      fixed_size<>: 3
+      element_bounds<>: [0, 2]
+
+  imu_axis_sign:
+    type: double_array
+    default_value: [1.0, 1.0, 1.0]
+    description: >
+      Per-ROS-axis multiplier applied after imu_axis_map. Normally +1.0 or
+      -1.0. Any finite non-zero value is accepted, so a mount whose sensor
+      needs scaling can be described without patching the driver.
+
+      sensor_msgs/Imu carries proper acceleration, so a correctly configured
+      gimbal at rest and level reads about +9.81 on linear_acceleration.z. If
+      yours reads -9.81, the z sign here is what to flip.
+    validation:
+      fixed_size<>: 3
+
   publish_tf:
     type: bool
     default_value: false
