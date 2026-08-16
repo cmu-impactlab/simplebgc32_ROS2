@@ -1,0 +1,23 @@
+# Select how the driver interprets subsequent commands.
+#
+# The constants mirror ptz_action_server_msgs/PtzState rather than SimpleBGC's
+# own CMD_CONTROL mode byte, so a client does not have to know the wire
+# protocol. The driver maps them onto the board's modes.
+
+uint8 MODE_IDLE=0      # relinquish the axes; the board holds its last state
+uint8 MODE_POSITION=1  # absolute angle targets  (board MODE_ANGLE)
+uint8 MODE_VELOCITY=2  # rate targets            (board MODE_SPEED)
+
+uint8 mode
+
+# Measure angles against the frame the gimbal is mounted on rather than the
+# gravity horizon. Ignored in MODE_VELOCITY and MODE_IDLE.
+# Maps to the board's MODE_ANGLE_REL_FRAME.
+bool relative_to_frame
+---
+bool success
+string message
+
+# The mode actually in force after the call. On failure this is the unchanged
+# previous mode, so a client can resynchronise without a second round trip.
+uint8 mode

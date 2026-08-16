@@ -1,0 +1,48 @@
+# Calibrate the board's gyroscope.
+#
+# An action rather than a service because it is slow and conditional: the
+# gimbal must be physically still before calibration starts, and waiting for it
+# to settle can take many seconds or never happen at all. A client needs to see
+# which of those is going on and be able to give up.
+#
+# WARNING: calibrating a moving gimbal writes a wrong zero-rate bias into the
+# board, and the result is a camera that drifts continuously afterwards. That
+# is why the settle check exists and why this is never run automatically.
+
+# Wait up to this long for the gimbal to go still. 0 means use the driver's
+# configured default. Exceeding it aborts without calibrating — a gimbal that
+# never settles must not be calibrated anyway.
+float32 settle_timeout
+
+# Calibrate as soon as the request arrives, without waiting for stillness.
+# Only for a caller that already knows the gimbal is stationary; the settle
+# check exists for a reason.
+bool skip_settle_check
+---
+bool success
+
+# CANCELLED and NOT_STILL are ordinary outcomes, not faults.
+uint8 RESULT_OK=0
+uint8 RESULT_NOT_STILL=1        # settle timeout expired while still moving
+uint8 RESULT_LINK_UNAVAILABLE=2
+uint8 RESULT_CANCELLED=3
+uint8 RESULT_REJECTED=4         # motion not permitted, or already running
+
+uint8 result_code
+string message
+
+# How long the whole operation took, settle time included.
+float32 elapsed
+---
+# WAITING_TO_SETTLE -> CALIBRATING is the normal progression.
+uint8 PHASE_WAITING_TO_SETTLE=0
+uint8 PHASE_CALIBRATING=1
+
+uint8 phase
+
+# Largest angular movement seen between two consecutive telemetry samples, in
+# radians. Meaningful while settling: it is the quantity being waited on, so a
+# client can show why it is still waiting rather than just that it is.
+float32 motion
+
+float32 elapsed
