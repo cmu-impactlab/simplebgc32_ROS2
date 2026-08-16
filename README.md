@@ -27,14 +27,35 @@ Target distro: **ROS 2 Jazzy** (primary), **Lyrical Luth** (forward target).
 
 ## Getting the source
 
-The protocol library is a submodule, so a plain clone leaves it empty and the build stops
-with an explanation.
-
 ```bash
 git clone --recurse-submodules https://github.com/cmu-impactlab/simplebgc32_ROS2.git
-# or, in an existing clone:
+```
+
+**Mind the `--recurse-submodules`.** The wire protocol is not copied into this repository.
+It is a git *submodule* pointing at
+[simplebgc32-control](https://github.com/magdang/simplebgc32-control), so the protocol has
+exactly one implementation — shared with the upstream standalone tools — rather than a
+second copy here that quietly drifts out of step.
+
+What git stores for a submodule is a URL and a commit, not the files themselves. A plain
+`git clone` therefore gives you `vendor/simplebgc32-control/` as an **empty directory**,
+and `sbgc_protocol` has nothing to compile. The build stops with:
+
+```
+CMake Error at CMakeLists.txt:16 (message):
+  Vendored simplebgc32-control not found at .../vendor/simplebgc32-control.
+  Run: git submodule update --init --recursive
+```
+
+That check exists so the failure names its own fix, rather than leaving you with a
+confusing `sbgc_api.h: No such file or directory` from the compiler. If you have already
+cloned without the flag, run exactly what it tells you:
+
+```bash
 git submodule update --init --recursive
 ```
+
+The `make` targets do this for you, so `make test` works in a plain clone regardless.
 
 ## Building
 
