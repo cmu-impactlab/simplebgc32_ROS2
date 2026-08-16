@@ -22,6 +22,22 @@ namespace
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kG = 9.80665;
 
+// Calibration timings, taken from the upstream daemon where they were arrived
+// at against real hardware.
+//
+// kCalibSeconds: the 2.6x manual says gyro calibration "takes about 4 seconds";
+// the extra half second stops the driver declaring success early.
+// kCalibStillRad: the most any axis may move between two consecutive telemetry
+// samples and still count as stationary. A couple of times the reading noise,
+// not zero -- an actively stabilised gimbal is never numerically still, and
+// demanding that it be would mean the calibration never runs.
+// kCalibStillSeconds: a settling gimbal passes through zero movement on its way
+// past, so a single quiet sample proves nothing.
+constexpr double kCalibSeconds = 4.5;
+constexpr double kCalibStillRad = 0.20 * kPi / 180.0;
+constexpr double kCalibStillSeconds = 1.0;
+constexpr double kCalibSettleTimeout = 20.0;
+
 double degToRad(double d) {return d * kPi / 180.0;}
 double radToDeg(double r) {return r * 180.0 / kPi;}
 
@@ -170,6 +186,20 @@ CallbackReturn SbgcDriverNode::on_configure(const rclcpp_lifecycle::State &)
     "~/get_board_info", bind2(&SbgcDriverNode::srvGetBoardInfo),
     rclcpp::ServicesQoS(), port_group_);
 
+  calib_server_ = rclcpp_action::create_server<Calibrate>(
+    this, "~/calibrate_gyro",
+    std::bind(&SbgcDriverNode::calibGoal, this, std::placeholders::_1, std::placeholders::_2),
+    std::bind(&SbgcDriverNode::calibCancel, this, std::placeholders::_1),
+    std::bind(&SbgcDriverNode::calibAccepted, this, std::placeholders::_1),
+    rcl_action_server_get_default_options(), port_group_);
+
+  traj_server_ = rclcpp_action::create_server<Trajectory>(
+    this, "~/follow_joint_trajectory",
+    std::bind(&SbgcDriverNode::trajGoal, this, std::placeholders::_1, std::placeholders::_2),
+    std::bind(&SbgcDriverNode::trajCancel, this, std::placeholders::_1),
+    std::bind(&SbgcDriverNode::trajAccepted, this, std::placeholders::_1),
+    rcl_action_server_get_default_options(), port_group_);
+
   diagnostics_ = std::make_unique<diagnostic_updater::Updater>(this);
   diagnostics_->setHardwareID("simplebgc32");
   diagnostics_->add("gimbal", this, &SbgcDriverNode::diagnose);
@@ -250,6 +280,11 @@ CallbackReturn SbgcDriverNode::on_cleanup(const rclcpp_lifecycle::State &)
   level_srv_.reset();
   control_mode_srv_.reset();
   board_info_srv_.reset();
+  calib_server_.reset();
+  traj_server_.reset();
+  calib_handle_.reset();
+  traj_handle_.reset();
+  calib_phase_ = CalibPhase::Idle;
 
   board_info_published_ = false;
   motors_on_ = false;
@@ -350,6 +385,9 @@ void SbgcDriverNode::controlTick()
     motors_on_ = link_.realtime().motors_on != 0;
     publishTelemetry();
   }
+
+  calibTick();
+  trajTick();
 }
 
 void SbgcDriverNode::telemetryTick()
@@ -786,6 +824,297 @@ void SbgcDriverNode::srvGetBoardInfo(
   res->info.state_flags = bi.state_flags1;
   res->info.board_features = bi.board_features;
   res->info.connection_flag = bi.connection_flag;
+}
+
+
+// ------------------------------------------------------------------ actions
+
+rclcpp_action::GoalResponse SbgcDriverNode::calibGoal(
+  const rclcpp_action::GoalUUID &, std::shared_ptr<const Calibrate::Goal>)
+{
+  // Refused here rather than accepted and immediately failed, so a rejection
+  // is a rejection in the protocol's own terms and never produces a Result.
+  if (calib_phase_ != CalibPhase::Idle) {
+    RCLCPP_WARN(get_logger(), "calibration already running");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  if (!core_->motionPermitted()) {
+    RCLCPP_WARN(get_logger(), "calibration refused: motion is not permitted");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse SbgcDriverNode::calibCancel(
+  const std::shared_ptr<CalibrateGoal>)
+{
+  // Accepted in both phases, but honoured differently: while settling nothing
+  // has been sent and the goal ends at once; once the board is calibrating,
+  // calibTick waits out the window before reporting, because no frame this
+  // project has verified confirms that a calibration was aborted.
+  calib_cancel_requested_ = true;
+  return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void SbgcDriverNode::calibAccepted(const std::shared_ptr<CalibrateGoal> handle)
+{
+  calib_handle_ = handle;
+  calib_cancel_requested_ = false;
+  calib_started_ = nowSeconds();
+  calib_phase_started_ = calib_started_;
+  calib_still_since_ = 0.0;
+  calib_have_last_angle_ = false;
+  calib_last_motion_ = 0.0;
+
+  const double requested = rclcpp::Duration(handle->get_goal()->settle_timeout).seconds();
+  calib_settle_timeout_ = requested > 0.0 ? requested : kCalibSettleTimeout;
+
+  if (handle->get_goal()->skip_settle_check) {
+    const uint8_t menu = SBGC_MENU_CALIB_GYRO;
+    link_.send(SBGC_CMD_EXECUTE_MENU, &menu, 1);
+    calib_phase_ = CalibPhase::Calibrating;
+    calib_phase_started_ = nowSeconds();
+    RCLCPP_WARN(get_logger(), "calibrating without waiting for the gimbal to settle");
+  } else {
+    calib_phase_ = CalibPhase::Settling;
+  }
+}
+
+void SbgcDriverNode::calibFinish(uint8_t code, const std::string & message)
+{
+  if (!calib_handle_) {
+    calib_phase_ = CalibPhase::Idle;
+    return;
+  }
+  auto result = std::make_shared<Calibrate::Result>();
+  result->result_code = code;
+  result->message = message;
+  result->elapsed = toDuration(nowSeconds() - calib_started_);
+
+  if (code == Calibrate::Result::RESULT_CANCELLED) {
+    calib_handle_->canceled(result);
+  } else if (code == Calibrate::Result::RESULT_OK) {
+    calib_handle_->succeed(result);
+  } else {
+    calib_handle_->abort(result);
+  }
+
+  RCLCPP_INFO(get_logger(), "calibration finished: %s", message.c_str());
+  calib_handle_.reset();
+  calib_phase_ = CalibPhase::Idle;
+  calib_cancel_requested_ = false;
+}
+
+void SbgcDriverNode::calibTick()
+{
+  if (calib_phase_ == CalibPhase::Idle || !calib_handle_) {return;}
+
+  const double t = nowSeconds();
+
+  if (!link_.isOpen()) {
+    calibFinish(Calibrate::Result::RESULT_LINK_UNAVAILABLE, "the serial link went away");
+    return;
+  }
+
+  auto feedback = std::make_shared<Calibrate::Feedback>();
+  feedback->elapsed = toDuration(t - calib_started_);
+  feedback->motion = static_cast<float>(calib_last_motion_);
+
+  if (calib_phase_ == CalibPhase::Settling) {
+    if (calib_cancel_requested_) {
+      calibFinish(Calibrate::Result::RESULT_CANCELLED, "cancelled while waiting to settle");
+      return;
+    }
+
+    feedback->phase = Calibrate::Feedback::PHASE_WAITING_TO_SETTLE;
+    calib_handle_->publish_feedback(feedback);
+
+    if (!core_->status().angle_valid) {return;}
+
+    const AxisArray angle = core_->status().continuous_rad;
+    if (calib_have_last_angle_) {
+      double worst = 0.0;
+      for (int a = 0; a < kNumAxes; ++a) {
+        worst = std::max(worst, std::abs(angle[a] - calib_last_angle_[a]));
+      }
+      calib_last_motion_ = worst;
+      if (worst <= kCalibStillRad) {
+        if (calib_still_since_ == 0.0) {calib_still_since_ = t;}
+      } else {
+        calib_still_since_ = 0.0;
+      }
+    }
+    calib_last_angle_ = angle;
+    calib_have_last_angle_ = true;
+
+    if (calib_still_since_ != 0.0 && (t - calib_still_since_) >= kCalibStillSeconds) {
+      const uint8_t menu = SBGC_MENU_CALIB_GYRO;
+      if (!link_.send(SBGC_CMD_EXECUTE_MENU, &menu, 1)) {
+        calibFinish(Calibrate::Result::RESULT_LINK_UNAVAILABLE, link_.lastError());
+        return;
+      }
+      calib_phase_ = CalibPhase::Calibrating;
+      calib_phase_started_ = t;
+      RCLCPP_INFO(get_logger(), "gimbal is still; calibrating");
+      return;
+    }
+
+    if ((t - calib_started_) >= calib_settle_timeout_) {
+      // A gimbal that never settles must not be calibrated: the bias written
+      // would be wrong and the camera would drift afterwards.
+      calibFinish(
+        Calibrate::Result::RESULT_NOT_STILL,
+        "the gimbal did not stop moving; nothing was calibrated");
+    }
+    return;
+  }
+
+  feedback->phase = Calibrate::Feedback::PHASE_CALIBRATING;
+  calib_handle_->publish_feedback(feedback);
+
+  if ((t - calib_phase_started_) >= kCalibSeconds) {
+    if (calib_cancel_requested_) {
+      calibFinish(
+        Calibrate::Result::RESULT_CANCELLED,
+        "cancelled, but the calibration had already started and was allowed to finish");
+    } else {
+      calibFinish(Calibrate::Result::RESULT_OK, "calibrated");
+    }
+  }
+}
+
+// ---- follow_joint_trajectory ---------------------------------------------
+
+rclcpp_action::GoalResponse SbgcDriverNode::trajGoal(
+  const rclcpp_action::GoalUUID &, std::shared_ptr<const Trajectory::Goal> goal)
+{
+  if (goal->trajectory.points.empty()) {
+    RCLCPP_WARN(get_logger(), "trajectory goal has no points");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  if (!core_->motionPermitted()) {
+    RCLCPP_WARN(get_logger(), "trajectory refused: motion is not permitted");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  if (calib_phase_ != CalibPhase::Idle) {
+    RCLCPP_WARN(get_logger(), "trajectory refused: a calibration is running");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+  for (const auto & name : goal->trajectory.joint_names) {
+    if (std::find(joint_names_.begin(), joint_names_.end(), name) == joint_names_.end()) {
+      RCLCPP_WARN(get_logger(), "trajectory names unknown joint '%s'", name.c_str());
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+  }
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse SbgcDriverNode::trajCancel(
+  const std::shared_ptr<TrajectoryGoal>)
+{
+  return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void SbgcDriverNode::trajAccepted(const std::shared_ptr<TrajectoryGoal> handle)
+{
+  traj_handle_ = handle;
+  const auto & goal = *handle->get_goal();
+
+  // Only the final point is driven to. The board runs its own trajectory
+  // between here and there at its configured slew rate, so replaying the
+  // intermediate points would fight it rather than help.
+  traj_target_ = core_->status().continuous_rad;
+  const auto & last = goal.trajectory.points.back();
+
+  for (size_t i = 0; i < goal.trajectory.joint_names.size() && i < last.positions.size(); ++i) {
+    const auto it = std::find(
+      joint_names_.begin(), joint_names_.end(), goal.trajectory.joint_names[i]);
+    const size_t a = static_cast<size_t>(std::distance(joint_names_.begin(), it));
+    traj_target_[a] = last.positions[i];
+  }
+
+  // A tolerance of zero means "unspecified" in this action, not "exact".
+  traj_tolerance_ = {{degToRad(1.0), degToRad(1.0), degToRad(1.0)}};
+  for (const auto & tol : goal.goal_tolerance) {
+    const auto it = std::find(joint_names_.begin(), joint_names_.end(), tol.name);
+    if (it == joint_names_.end() || tol.position <= 0.0) {continue;}
+    traj_tolerance_[static_cast<size_t>(std::distance(joint_names_.begin(), it))] = tol.position;
+  }
+
+  const double travel = rclcpp::Duration(last.time_from_start).seconds();
+  const double slack = rclcpp::Duration(goal.goal_time_tolerance).seconds();
+  // A goal with no timing at all still needs a deadline, or a gimbal that
+  // cannot reach the target would leave the goal active forever.
+  traj_deadline_ = nowSeconds() + (travel > 0.0 ? travel : 10.0) + (slack > 0.0 ? slack : 2.0);
+
+  core_->submitAngle(traj_target_, relative_to_frame_);
+}
+
+void SbgcDriverNode::trajFinish(int32_t code, const std::string & message)
+{
+  if (!traj_handle_) {return;}
+  auto result = std::make_shared<Trajectory::Result>();
+  result->error_code = code;
+  result->error_string = message;
+
+  if (code == Trajectory::Result::SUCCESSFUL) {
+    traj_handle_->succeed(result);
+  } else if (traj_handle_->is_canceling()) {
+    traj_handle_->canceled(result);
+  } else {
+    traj_handle_->abort(result);
+  }
+  traj_handle_.reset();
+}
+
+void SbgcDriverNode::trajTick()
+{
+  if (!traj_handle_) {return;}
+
+  if (traj_handle_->is_canceling()) {
+    core_->submitHold();
+    trajFinish(Trajectory::Result::SUCCESSFUL, "cancelled");
+    return;
+  }
+  if (!link_.isOpen()) {
+    trajFinish(Trajectory::Result::INVALID_GOAL, "the serial link went away");
+    return;
+  }
+
+  // Re-submitted every cycle. The command watchdog is deliberately short, and
+  // a goal that stopped feeding it would be held mid-slew by the very
+  // mechanism that protects against a dead publisher.
+  core_->submitAngle(traj_target_, relative_to_frame_);
+
+  const AxisArray at = core_->status().continuous_rad;
+  auto feedback = std::make_shared<Trajectory::Feedback>();
+  feedback->header.stamp = now();
+  feedback->joint_names = joint_names_;
+  feedback->desired.positions = {traj_target_[0], traj_target_[1], traj_target_[2]};
+  feedback->actual.positions = {at[0], at[1], at[2]};
+  feedback->error.positions = {
+    traj_target_[0] - at[0], traj_target_[1] - at[1], traj_target_[2] - at[2]};
+  traj_handle_->publish_feedback(feedback);
+
+  if (core_->status().angle_valid) {
+    bool arrived = true;
+    for (int a = 0; a < kNumAxes; ++a) {
+      if (std::abs(traj_target_[a] - at[a]) > traj_tolerance_[static_cast<size_t>(a)]) {
+        arrived = false;
+      }
+    }
+    if (arrived) {
+      trajFinish(Trajectory::Result::SUCCESSFUL, "reached the goal");
+      return;
+    }
+  }
+
+  if (nowSeconds() > traj_deadline_) {
+    core_->submitHold();
+    trajFinish(
+      Trajectory::Result::GOAL_TOLERANCE_VIOLATED,
+      "the gimbal did not reach the goal in time");
+  }
 }
 
 }  // namespace sbgc_driver

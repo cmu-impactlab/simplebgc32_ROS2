@@ -17,6 +17,7 @@ find_package(diagnostic_updater REQUIRED)
 find_package(generate_parameter_library REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(sbgc_interfaces REQUIRED)
@@ -59,6 +60,7 @@ ament_target_dependencies(sbgc_driver_component PUBLIC
   diagnostic_updater
   geometry_msgs
   rclcpp
+  rclcpp_action
   rclcpp_components
   rclcpp_lifecycle
   sbgc_interfaces

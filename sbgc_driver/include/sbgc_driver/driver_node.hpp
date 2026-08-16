@@ -41,6 +41,9 @@
 #include "std_srvs/srv/set_bool.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "control_msgs/msg/joint_jog.hpp"
+#include "control_msgs/action/follow_joint_trajectory.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
+#include "sbgc_interfaces/action/calibrate_gyro.hpp"
 
 #include "sbgc_driver_parameters.hpp"
 
@@ -53,6 +56,11 @@ using CallbackReturn =
 class SbgcDriverNode : public rclcpp_lifecycle::LifecycleNode
 {
 public:
+  using Calibrate = sbgc_interfaces::action::CalibrateGyro;
+  using CalibrateGoal = rclcpp_action::ServerGoalHandle<Calibrate>;
+  using Trajectory = control_msgs::action::FollowJointTrajectory;
+  using TrajectoryGoal = rclcpp_action::ServerGoalHandle<Trajectory>;
+
   explicit SbgcDriverNode(const rclcpp::NodeOptions & options);
 
   CallbackReturn on_configure(const rclcpp_lifecycle::State &) override;
@@ -102,6 +110,26 @@ private:
     const sbgc_interfaces::srv::GetBoardInfo::Request::SharedPtr req,
     sbgc_interfaces::srv::GetBoardInfo::Response::SharedPtr res);
 
+  // ---- actions ----
+  //
+  // Both servers are state machines advanced from the control timer rather
+  // than from a thread of their own. That keeps every port access inside the
+  // one mutually-exclusive callback group, which is the whole basis for this
+  // node being safe under a multi-threaded executor.
+  rclcpp_action::GoalResponse calibGoal(
+    const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Calibrate::Goal> goal);
+  rclcpp_action::CancelResponse calibCancel(const std::shared_ptr<CalibrateGoal> handle);
+  void calibAccepted(const std::shared_ptr<CalibrateGoal> handle);
+  void calibTick();
+  void calibFinish(uint8_t code, const std::string & message);
+
+  rclcpp_action::GoalResponse trajGoal(
+    const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Trajectory::Goal> goal);
+  rclcpp_action::CancelResponse trajCancel(const std::shared_ptr<TrajectoryGoal> handle);
+  void trajAccepted(const std::shared_ptr<TrajectoryGoal> handle);
+  void trajTick();
+  void trajFinish(int32_t code, const std::string & message);
+
   // ---- publishing ----
   void publishTelemetry();
   void publishBoardInfo();
@@ -138,6 +166,9 @@ private:
   rclcpp::Service<sbgc_interfaces::srv::SetControlMode>::SharedPtr control_mode_srv_;
   rclcpp::Service<sbgc_interfaces::srv::GetBoardInfo>::SharedPtr board_info_srv_;
 
+  rclcpp_action::Server<Calibrate>::SharedPtr calib_server_;
+  rclcpp_action::Server<Trajectory>::SharedPtr traj_server_;
+
   rclcpp::TimerBase::SharedPtr control_timer_;
   rclcpp::TimerBase::SharedPtr telemetry_timer_;
   rclcpp::TimerBase::SharedPtr board_info_timer_;
@@ -151,6 +182,25 @@ private:
   bool motors_on_ = false;
   bool relative_to_frame_ = false;
   bool board_info_published_ = false;
+
+  // Calibration state machine.
+  enum class CalibPhase { Idle, Settling, Calibrating };
+  CalibPhase calib_phase_ = CalibPhase::Idle;
+  std::shared_ptr<CalibrateGoal> calib_handle_;
+  double calib_started_ = 0.0;
+  double calib_phase_started_ = 0.0;
+  double calib_still_since_ = 0.0;
+  double calib_settle_timeout_ = 20.0;
+  double calib_last_motion_ = 0.0;
+  AxisArray calib_last_angle_{{0.0, 0.0, 0.0}};
+  bool calib_have_last_angle_ = false;
+  bool calib_cancel_requested_ = false;
+
+  // Trajectory state machine.
+  std::shared_ptr<TrajectoryGoal> traj_handle_;
+  AxisArray traj_target_{{0.0, 0.0, 0.0}};
+  AxisArray traj_tolerance_{{0.0, 0.0, 0.0}};
+  double traj_deadline_ = 0.0;
 
   double telemetry_stamp_ = 0.0;
   rclcpp::Time board_info_stamp_;
