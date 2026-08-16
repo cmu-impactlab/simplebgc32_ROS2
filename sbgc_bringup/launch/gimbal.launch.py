@@ -51,8 +51,11 @@ def generate_launch_description():
         ' yaw_min:=', LaunchConfiguration('yaw_min'),
         ' yaw_max:=', LaunchConfiguration('yaw_max'),
         ' imu_parent:=', LaunchConfiguration('imu_parent'),
-        ' imu_xyz:=', LaunchConfiguration('imu_xyz'),
-        ' imu_rpy:=', LaunchConfiguration('imu_rpy'),
+        # Quoted, because these are multi-word values. Command joins this list
+        # into one string and shlex-splits it, so an unquoted "0 0 0" arrives at
+        # xacro as three separate arguments and the placement is silently lost.
+        ' imu_xyz:="', LaunchConfiguration('imu_xyz'), '"',
+        ' imu_rpy:="', LaunchConfiguration('imu_rpy'), '"',
     ]), value_type=str)
 
     driver = LifecycleNode(
